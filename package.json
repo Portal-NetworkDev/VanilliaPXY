@@ -1,13 +1,14 @@
 {
   "name": "vanilliapxy",
-  "version": "0.2.0",
+  "version": "0.5.0",
   "description": "Streaming transport backend for browser-side web proxy engines",
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "node --test"
   },
   "dependencies": {
     "undici": "^7.16.0",
