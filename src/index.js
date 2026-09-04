@@ -30,7 +30,7 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: maxWebSocketPayloa
 
 function sendError(res, status, message) {
   if (res.headersSent) return res.destroy();
-  res.writeHead(status, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*" });
+  res.writeHead(status, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*", "x-robots-tag": "noindex, nofollow, noarchive" });
   res.end(message);
 }
 
@@ -136,8 +136,17 @@ function handleWebSocket(req, socket, head) {
 
 async function handleRequest(req, res) {
   const url = new URL(req.url, "http://localhost");
+  if (url.pathname === "/robots.txt") {
+    res.writeHead(200, {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "no-store",
+      "x-robots-tag": "noindex, nofollow, noarchive"
+    });
+    res.end("User-agent: *\nDisallow: /\n");
+    return;
+  }
   if (url.pathname === "/health") {
-    res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*" });
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*", "x-robots-tag": "noindex, nofollow, noarchive" });
     res.end(JSON.stringify({ status: "ok", version: "0.9.3" }));
     return;
   }
@@ -148,7 +157,7 @@ async function handleRequest(req, res) {
     return;
   }
   if (req.method === "OPTIONS") {
-    res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS", "access-control-allow-headers": "*", "access-control-max-age": "86400" });
+    res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS", "access-control-allow-headers": "*", "access-control-max-age": "86400", "x-robots-tag": "noindex, nofollow, noarchive" });
     res.end();
     return;
   }
