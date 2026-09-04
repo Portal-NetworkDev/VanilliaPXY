@@ -9,6 +9,8 @@ const hopByHop = new Set([
   "upgrade"
 ]);
 
+const restricted = new Set(["content-length", "content-encoding"]);
+
 export function requestHeaders(headers, target) {
   const result = {};
   for (const [name, value] of Object.entries(headers)) {
@@ -25,7 +27,12 @@ export function responseHeaders(headers) {
   for (const [name, value] of Object.entries(headers)) {
     const lower = name.toLowerCase();
     if (value == null || hopByHop.has(lower)) continue;
-    result[name] = lower === "set-cookie" ? normalizeCookies(value) : value;
+    if (restricted.has(lower)) continue;
+    if (lower === "set-cookie") {
+      result[name] = normalizeCookies(value);
+      continue;
+    }
+    result[name] = value;
   }
   return result;
 }
