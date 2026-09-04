@@ -10,10 +10,6 @@ export function parseTarget(value) {
     const target = new URL(value);
     if (target.username || target.password) return null;
     if (target.protocol !== "http:" && target.protocol !== "https:") return null;
-    if (target.port && !["80", "443"].includes(target.port)) {
-      const port = Number(target.port);
-      if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
-    }
     return target;
   } catch {
     return null;
