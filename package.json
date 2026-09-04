@@ -1,7 +1,7 @@
 {
   "name": "vanilliapxy",
-  "version": "0.1.0",
-  "description": "Streaming HTTP transport for browser-side web proxy engines",
+  "version": "0.2.0",
+  "description": "Streaming transport backend for browser-side web proxy engines",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -10,6 +10,7 @@
     "start": "node src/index.js"
   },
   "dependencies": {
-    "undici": "^7.16.0"
+    "undici": "^7.16.0",
+    "ws": "^8.18.3"
   }
 }
