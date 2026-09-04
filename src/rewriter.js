@@ -18,8 +18,15 @@ export function rewriteCss(text, base, endpoint) {
   });
 }
 
-export function rewriteHtml(text, base, endpoint) {
-  return text.replace(/(\b(?:href|src|action|poster|cite|formaction)\s*=\s*)(["'])(.*?)(\2)/gi,
+export function rewriteHtml(text, base, endpoint, runtime = "") {
+  let output = text.replace(/(\b(?:href|src|action|poster|cite|formaction)\s*=\s*)(["'])(.*?)(\2)/gi,
     (match, prefix, quote, value, closing) => prefix + quote + proxyUrl(value, base, endpoint) + closing
   );
+
+  if (runtime && /<\/head\s*>/i.test(output)) {
+    output = output.replace(/<\/head\s*>/i, `${runtime}</head>`);
+  } else if (runtime) {
+    output = `${runtime}${output}`;
+  }
+  return output;
 }
