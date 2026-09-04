@@ -7,7 +7,6 @@ import { requestHeaders, responseHeaders } from "./headers.js";
 import { rewriteCss, rewriteHtml } from "./rewriter.js";
 import { runtimeScript } from "./runtime.js";
 import { serviceWorkerResponse } from "./service-worker.js";
-import { rewriteUrl } from "./url.js";
 
 const port = Number(process.env.PORT) || 8080;
 const timeout = Number(process.env.UPSTREAM_TIMEOUT) || 30000;
@@ -65,7 +64,8 @@ function bodyBuffer(stream, limit) {
 
 function proxiedRedirect(location, base, req) {
   const absolute = new URL(location, base);
-  const origin = `${req.headers["x-forwarded-proto"] || "http"}://${req.headers.host || "localhost"}`;
+  const protocol = req.headers["x-forwarded-proto"] || (req.socket.encrypted ? "https" : "http");
+  const origin = `${protocol}://${req.headers.host || "localhost"}`;
   return new URL(`${endpoint}${encodeURIComponent(absolute.href)}`, origin).href;
 }
 
@@ -90,8 +90,6 @@ async function proxyRequest(req, res, target, redirects = 0) {
     const location = upstream.headers.location;
     const replayable = req.method === "GET" || req.method === "HEAD";
 
-    // Follow GET/HEAD redirects on the server so the browser never leaves
-    // the proxy origin while resolving an upstream redirect chain.
     if (location && upstream.statusCode >= 300 && upstream.statusCode < 400 && replayable) {
       upstream.body.resume();
       if (redirects >= maxRedirects) return sendError(res, 508, "Too many redirects");
@@ -104,8 +102,6 @@ async function proxyRequest(req, res, target, redirects = 0) {
     if (location && rewriteEnabled) {
       const redirect = await validateRedirect(location, target, allowPrivate);
       if (!redirect) return sendError(res, 403, "Redirect target is not allowed");
-      // Always emit a URL on the proxy origin. This prevents redirects such
-      // as portal-network.com -> www.portal-network.com from escaping the proxy.
       headersOut.location = proxiedRedirect(location, target, req);
     }
 
@@ -122,7 +118,7 @@ async function proxyRequest(req, res, target, redirects = 0) {
     const source = body.toString("utf8");
     const rewritten = type.includes("text/css")
       ? rewriteCss(source, target.href, endpoint)
-      : rewriteHtml(source, target.href, endpoint, runtimeScript(endpoint));
+      : rewriteHtml(source, target.href, endpoint, runtimeScript(endpoint, "/service-worker.js", target.href));
     const output = Buffer.from(rewritten, "utf8");
     delete headersOut["content-length"];
     delete headersOut["content-encoding"];
@@ -174,7 +170,7 @@ async function handleRequest(req, res) {
       "x-robots-tag": "noindex, nofollow, noarchive",
       "access-control-allow-origin": "*"
     });
-    res.end(JSON.stringify({ status: "ok", version: "0.9.4" }));
+    res.end(JSON.stringify({ status: "ok", version: "0.9.5" }));
     return;
   }
   if (url.pathname === "/robots.txt") {
