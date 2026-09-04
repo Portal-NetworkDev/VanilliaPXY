@@ -98,14 +98,15 @@ async function proxyRequest(req, res, target, redirects = 0) {
       return proxyRequest(req, res, next, redirects + 1);
     }
 
-    const headersOut = responseHeaders(upstream.headers);
+    const rewrittenResponse = canRewrite(upstream.headers);
+    const headersOut = responseHeaders(upstream.headers, { rewritten: rewrittenResponse });
     if (location && rewriteEnabled) {
       const redirect = await validateRedirect(location, target, allowPrivate);
       if (!redirect) return sendError(res, 403, "Redirect target is not allowed");
       headersOut.location = proxiedRedirect(location, target, req);
     }
 
-    if (!canRewrite(upstream.headers) || [204, 304].includes(upstream.statusCode)) {
+    if (!rewrittenResponse || [204, 304].includes(upstream.statusCode)) {
       res.writeHead(upstream.statusCode, headersOut);
       upstream.body.on("error", () => res.destroy());
       upstream.body.pipe(res);
