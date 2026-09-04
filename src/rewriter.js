@@ -1,32 +1,29 @@
-const absolute = /^(?:[a-z][a-z0-9+.-]*:|\/\/|#|data:|mailto:|javascript:|blob:|about:)/i;
+import { rewriteSrcset, rewriteUrl } from "./url.js";
 
-export function proxyUrl(value, base, endpoint = "/proxy?url=") {
-  if (!value || absolute.test(value.trim())) return value;
-  try {
-    const resolved = new URL(value, base);
-    if (resolved.protocol !== "http:" && resolved.protocol !== "https:") return value;
-    return endpoint + encodeURIComponent(resolved.href);
-  } catch {
-    return value;
-  }
+const attributePattern = /(\b(?:href|src|action|poster|cite|formaction|manifest|ping|background)\s*=\s*)(["'])(.*?)(\2)/gi;
+
+export function proxyUrl(value, base, endpoint = "/vanillia?url=") {
+  return rewriteUrl(value, base, endpoint);
 }
 
-export function rewriteCss(text, base, endpoint) {
+export function rewriteCss(text, base, endpoint = "/vanillia?url=") {
   return text.replace(/url\(\s*(["']?)(.*?)\1\s*\)/gi, (match, quote, value) => {
-    if (!value || /^(?:data:|blob:|about:|#)/i.test(value.trim())) return match;
-    return `url(${quote}${proxyUrl(value.trim(), base, endpoint)}${quote})`;
+    const input = value.trim();
+    if (!input || /^(?:data:|blob:|about:|#)/i.test(input)) return match;
+    return `url(${quote}${rewriteUrl(input, base, endpoint)}${quote})`;
   });
 }
 
-export function rewriteHtml(text, base, endpoint, runtime = "") {
-  let output = text.replace(/(\b(?:href|src|action|poster|cite|formaction)\s*=\s*)(["'])(.*?)(\2)/gi,
-    (match, prefix, quote, value, closing) => prefix + quote + proxyUrl(value, base, endpoint) + closing
-  );
+export function rewriteHtml(text, base, endpoint = "/vanillia?url=", runtime = "") {
+  let output = text.replace(attributePattern, (match, prefix, quote, value, closing) => {
+    return `${prefix}${quote}${rewriteUrl(value, base, endpoint)}${closing}`;
+  });
 
-  if (runtime && /<\/head\s*>/i.test(output)) {
-    output = output.replace(/<\/head\s*>/i, `${runtime}</head>`);
-  } else if (runtime) {
-    output = `${runtime}${output}`;
-  }
+  output = output.replace(/(\bsrcset\s*=\s*)(["'])(.*?)(\2)/gi, (match, prefix, quote, value, closing) => {
+    return `${prefix}${quote}${rewriteSrcset(value, base, endpoint)}${closing}`;
+  });
+
+  if (runtime && /<\/head\s*>/i.test(output)) output = output.replace(/<\/head\s*>/i, `${runtime}</head>`);
+  else if (runtime) output = `${runtime}${output}`;
   return output;
 }
