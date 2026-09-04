@@ -26,15 +26,12 @@ export function proxyUrl(value, base, endpoint = "/vanillia?url=") {
 }
 
 export function rewriteCss(text, base, endpoint = "/vanillia?url=") {
-  // Run a second validation pass so CSS that contains nested/generated
-  // references gets another chance to be routed. rewriteUrl is safe to
-  // re-run because already-proxied URLs are treated as absolute URLs.
   let output = cssPass(String(text ?? ""), base, endpoint);
   output = cssPass(output, base, endpoint);
   return output;
 }
 
-export function rewriteHtml(text, base, endpoint = "/vanillia?url=", runtime = "") {
+export function rewriteHtml(text, base, endpoint = "/vanillia?url=", runtime = "", iconHref = "") {
   let output = text.replace(attributePattern, (match, prefix, quote, value, closing) => {
     return `${prefix}${quote}${rewriteUrl(value, base, endpoint)}${closing}`;
   });
@@ -42,6 +39,12 @@ export function rewriteHtml(text, base, endpoint = "/vanillia?url=", runtime = "
   output = output.replace(/(\bsrcset\s*=\s*)(["'])(.*?)(\2)/gi, (match, prefix, quote, value, closing) => {
     return `${prefix}${quote}${rewriteSrcset(value, base, endpoint)}${closing}`;
   });
+
+  if (iconHref) {
+    const iconTag = `<link rel="icon" data-vanillia-icon="true" href="${iconHref}">`;
+    if (/<\/head\s*>/i.test(output)) output = output.replace(/<\/head\s*>/i, `${iconTag}</head>`);
+    else output = `${iconTag}${output}`;
+  }
 
   if (runtime && /<\/head\s*>/i.test(output)) output = output.replace(/<\/head\s*>/i, `${runtime}</head>`);
   else if (runtime) output = `${runtime}${output}`;
