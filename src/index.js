@@ -1,6 +1,7 @@
 import http from "node:http";
 import { request } from "undici";
 import { WebSocketServer, WebSocket } from "ws";
+import { server as wisp } from "@mercuryworkshop/wisp-js/server";
 import { validateTarget, validateRedirect } from "./policy.js";
 import { requestHeaders, responseHeaders } from "./headers.js";
 import { rewriteCss, rewriteHtml } from "./rewriter.js";
@@ -16,6 +17,10 @@ const maxWebSocketPayload = Number(process.env.MAX_WS_PAYLOAD) || 16 * 1024 * 10
 const allowPrivate = process.env.ALLOW_PRIVATE_TARGETS === "true";
 const rewriteEnabled = process.env.REWRITE !== "false";
 const endpoint = process.env.PROXY_ENDPOINT || "/vanillia?url=";
+const wispPath = process.env.WISP_PATH || "/wisp/";
+
+wisp.options.allow_private_ips = allowPrivate;
+wisp.options.allow_loopback_ips = allowPrivate;
 
 const server = http.createServer({ maxHeaderSize }, handleRequest);
 const wss = new WebSocketServer({ noServer: true, maxPayload: maxWebSocketPayload });
@@ -130,7 +135,7 @@ async function handleRequest(req, res) {
   const url = new URL(req.url, "http://localhost");
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*" });
-    res.end(JSON.stringify({ status: "ok", version: "0.8.0" }));
+    res.end(JSON.stringify({ status: "ok", version: "0.8.2" }));
     return;
   }
   if (req.method === "OPTIONS") {
@@ -145,7 +150,13 @@ async function handleRequest(req, res) {
 }
 
 server.on("upgrade", (req, socket, head) => {
-  if (new URL(req.url, "http://localhost").pathname !== "/ws") return socket.destroy();
+  const pathname = new URL(req.url, "http://localhost").pathname;
+  if (pathname === wispPath) {
+    req.url = wispPath;
+    wisp.routeRequest(req, socket, head);
+    return;
+  }
+  if (pathname !== "/ws") return socket.destroy();
   handleWebSocket(req, socket, head);
 });
 
