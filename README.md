@@ -2,3 +2,7 @@
 
 
 Dev server (just the backend, in beta): https://8080.testserver.vanilliaruntime.portal-network.com/
+
+# How do I get the Backend to work? 
+
+You have to inject a url string after the url. It should look something like '/vanillia?url=https://example.com/' after the url. 
