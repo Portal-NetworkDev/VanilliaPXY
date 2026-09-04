@@ -1,9 +1,10 @@
 import http from "node:http";
 import { request } from "undici";
 import { WebSocketServer, WebSocket } from "ws";
-import { parseTarget, isTargetAllowed, resolveRedirect } from "./target.js";
+import { parseTarget, isTargetAllowed } from "./target.js";
 import { requestHeaders, responseHeaders } from "./headers.js";
 import { rewriteCss, rewriteHtml } from "./rewriter.js";
+import { rewriteUrl } from "./url.js";
 
 const port = Number(process.env.PORT) || 8080;
 const timeout = Number(process.env.UPSTREAM_TIMEOUT) || 30000;
@@ -75,12 +76,15 @@ async function proxyRequest(req, res, target, redirects = 0) {
     const replayable = req.method === "GET" || req.method === "HEAD";
     if (location && upstream.statusCode >= 300 && upstream.statusCode < 400 && replayable) {
       upstream.body.resume();
-      const next = resolveRedirect(location, target);
-      if (!next) return sendError(res, 502, "Unsupported redirect");
+      if (redirects >= maxRedirects) return sendError(res, 508, "Too many redirects");
+      let next;
+      try { next = new URL(location, target); } catch { return sendError(res, 502, "Invalid redirect"); }
+      if (!(next.protocol === "http:" || next.protocol === "https:")) return sendError(res, 502, "Unsupported redirect");
       return proxyRequest(req, res, next, redirects + 1);
     }
 
     const headersOut = responseHeaders(upstream.headers);
+    if (location && rewriteEnabled) headersOut.location = rewriteUrl(new URL(location, target).href, target, endpoint);
     const shouldRewrite = canRewrite(upstream.headers) && ![204, 304].includes(upstream.statusCode);
     if (!shouldRewrite) {
       res.writeHead(upstream.statusCode, headersOut);
@@ -140,7 +144,7 @@ async function handleRequest(req, res) {
   const url = new URL(req.url, "http://localhost");
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*" });
-    res.end(JSON.stringify({ status: "ok", version: "0.5.0" }));
+    res.end(JSON.stringify({ status: "ok", version: "0.6.0" }));
     return;
   }
   if (req.method === "OPTIONS") {
