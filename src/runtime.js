@@ -6,6 +6,7 @@ const runtimeSource = String.raw`(() => {
   const nativeOpen = XMLHttpRequest.prototype.open;
   const base = document.baseURI;
   const endpoint = globalThis.__VANILLIAPXY_ENDPOINT__ || "/vanillia?url=";
+  const workerEndpoint = globalThis.__VANILLIAPXY_SW__ || "/service-worker.js";
   const proxy = value => {
     if (typeof value !== "string" || !value) return value;
     const trimmed = value.trim();
@@ -29,8 +30,22 @@ const runtimeSource = String.raw`(() => {
   XMLHttpRequest.prototype.open = function(method, url, ...rest) {
     return nativeOpen.call(this, method, proxy(String(url)), ...rest);
   };
+  if (navigator.serviceWorker) {
+    const nativeRegister = navigator.serviceWorker.register.bind(navigator.serviceWorker);
+    navigator.serviceWorker.register = (scriptURL, options = {}) => {
+      const original = new URL(String(scriptURL), base).href;
+      const isolated = new URL(workerEndpoint, location.origin);
+      isolated.searchParams.set("target", original);
+      const next = { ...options };
+      if (next.scope) {
+        const scope = new URL(next.scope, base);
+        if (scope.origin !== location.origin) next.scope = "/";
+      }
+      return nativeRegister(isolated.href, next);
+    };
+  }
 })();`;
 
-export function runtimeScript(endpoint = "/vanillia?url=") {
-  return `<script data-vanillia-runtime>globalThis.__VANILLIAPXY_ENDPOINT__=${JSON.stringify(endpoint)};${runtimeSource}</script>`;
+export function runtimeScript(endpoint = "/vanillia?url=", workerEndpoint = "/service-worker.js") {
+  return `<script data-vanillia-runtime>globalThis.__VANILLIAPXY_ENDPOINT__=${JSON.stringify(endpoint)};globalThis.__VANILLIAPXY_SW__=${JSON.stringify(workerEndpoint)};${runtimeSource}</script>`;
 }
