@@ -12,8 +12,6 @@ import { rewriteUrl } from "./url.js";
 const port = Number(process.env.PORT) || 8080;
 const timeout = Number(process.env.UPSTREAM_TIMEOUT) || 30000;
 const maxRedirects = Number(process.env.MAX_REDIRECTS) || 8;
-// Eaglercraft single-file builds can exceed 100 MiB. Keep this configurable
-// and avoid rejecting large web apps merely because they need rewriting.
 const maxRewriteSize = Number(process.env.MAX_REWRITE_SIZE) || 256 * 1024 * 1024;
 const maxHeaderSize = Number(process.env.MAX_HEADER_SIZE) || 32768;
 const maxWebSocketPayload = Number(process.env.MAX_WS_PAYLOAD) || 16 * 1024 * 1024;
@@ -30,7 +28,12 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: maxWebSocketPayloa
 
 function sendError(res, status, message) {
   if (res.headersSent) return res.destroy();
-  res.writeHead(status, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*", "x-robots-tag": "noindex, nofollow, noarchive" });
+  res.writeHead(status, {
+    "content-type": "text/plain; charset=utf-8",
+    "cache-control": "no-store",
+    "x-robots-tag": "noindex, nofollow, noarchive",
+    "access-control-allow-origin": "*"
+  });
   res.end(message);
 }
 
@@ -60,6 +63,12 @@ function bodyBuffer(stream, limit) {
   });
 }
 
+function proxiedRedirect(location, base, req) {
+  const absolute = new URL(location, base);
+  const origin = `${req.headers["x-forwarded-proto"] || "http"}://${req.headers.host || "localhost"}`;
+  return new URL(`${endpoint}${encodeURIComponent(absolute.href)}`, origin).href;
+}
+
 async function proxyRequest(req, res, target, redirects = 0) {
   if (redirects > maxRedirects) return sendError(res, 508, "Too many redirects");
   const allowed = await validateTarget(target.href, allowPrivate);
@@ -69,9 +78,20 @@ async function proxyRequest(req, res, target, redirects = 0) {
   const headers = requestHeaders(req.headers, target);
   if (rewriteEnabled) headers["accept-encoding"] = "identity";
   try {
-    const upstream = await request(target, { method: req.method, headers, body: req.method === "GET" || req.method === "HEAD" ? null : req, signal: controller.signal, maxRedirections: 0, headersTimeout: timeout, bodyTimeout: 0 });
+    const upstream = await request(target, {
+      method: req.method,
+      headers,
+      body: req.method === "GET" || req.method === "HEAD" ? null : req,
+      signal: controller.signal,
+      maxRedirections: 0,
+      headersTimeout: timeout,
+      bodyTimeout: 0
+    });
     const location = upstream.headers.location;
     const replayable = req.method === "GET" || req.method === "HEAD";
+
+    // Follow GET/HEAD redirects on the server so the browser never leaves
+    // the proxy origin while resolving an upstream redirect chain.
     if (location && upstream.statusCode >= 300 && upstream.statusCode < 400 && replayable) {
       upstream.body.resume();
       if (redirects >= maxRedirects) return sendError(res, 508, "Too many redirects");
@@ -79,23 +99,30 @@ async function proxyRequest(req, res, target, redirects = 0) {
       if (!next) return sendError(res, 403, "Redirect target is not allowed");
       return proxyRequest(req, res, next, redirects + 1);
     }
+
     const headersOut = responseHeaders(upstream.headers);
     if (location && rewriteEnabled) {
       const redirect = await validateRedirect(location, target, allowPrivate);
       if (!redirect) return sendError(res, 403, "Redirect target is not allowed");
-      headersOut.location = rewriteUrl(redirect.href, target, endpoint);
+      // Always emit a URL on the proxy origin. This prevents redirects such
+      // as portal-network.com -> www.portal-network.com from escaping the proxy.
+      headersOut.location = proxiedRedirect(location, target, req);
     }
+
     if (!canRewrite(upstream.headers) || [204, 304].includes(upstream.statusCode)) {
       res.writeHead(upstream.statusCode, headersOut);
       upstream.body.on("error", () => res.destroy());
       upstream.body.pipe(res);
       return;
     }
+
     const body = await bodyBuffer(upstream.body, maxRewriteSize);
     if (body === null) return sendError(res, 413, `Response exceeds rewrite limit (${Math.floor(maxRewriteSize / 1024 / 1024)} MiB)`);
     const type = String(upstream.headers["content-type"] || "").toLowerCase();
     const source = body.toString("utf8");
-    const rewritten = type.includes("text/css") ? rewriteCss(source, target.href, endpoint) : rewriteHtml(source, target.href, endpoint, runtimeScript(endpoint));
+    const rewritten = type.includes("text/css")
+      ? rewriteCss(source, target.href, endpoint)
+      : rewriteHtml(source, target.href, endpoint, runtimeScript(endpoint));
     const output = Buffer.from(rewritten, "utf8");
     delete headersOut["content-length"];
     delete headersOut["content-encoding"];
@@ -116,7 +143,11 @@ function handleWebSocket(req, socket, head) {
     const target = await validateTarget(rawTarget, allowPrivate);
     if (!target) return client.close(1008, "Target is not allowed");
     target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
-    const upstream = new WebSocket(target, { headers: requestHeaders(req.headers, target), handshakeTimeout: timeout, maxPayload: maxWebSocketPayload });
+    const upstream = new WebSocket(target, {
+      headers: requestHeaders(req.headers, target),
+      handshakeTimeout: timeout,
+      maxPayload: maxWebSocketPayload
+    });
     let closed = false;
     const closeBoth = (code = 1000, reason = "") => {
       if (closed) return;
@@ -136,6 +167,16 @@ function handleWebSocket(req, socket, head) {
 
 async function handleRequest(req, res) {
   const url = new URL(req.url, "http://localhost");
+  if (url.pathname === "/health") {
+    res.writeHead(200, {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      "x-robots-tag": "noindex, nofollow, noarchive",
+      "access-control-allow-origin": "*"
+    });
+    res.end(JSON.stringify({ status: "ok", version: "0.9.4" }));
+    return;
+  }
   if (url.pathname === "/robots.txt") {
     res.writeHead(200, {
       "content-type": "text/plain; charset=utf-8",
@@ -145,11 +186,6 @@ async function handleRequest(req, res) {
     res.end("User-agent: *\nDisallow: /\n");
     return;
   }
-  if (url.pathname === "/health") {
-    res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*", "x-robots-tag": "noindex, nofollow, noarchive" });
-    res.end(JSON.stringify({ status: "ok", version: "0.9.3" }));
-    return;
-  }
   if (url.pathname === "/service-worker.js") {
     const response = serviceWorkerResponse();
     res.writeHead(response.status, Object.fromEntries(response.headers));
@@ -157,7 +193,12 @@ async function handleRequest(req, res) {
     return;
   }
   if (req.method === "OPTIONS") {
-    res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS", "access-control-allow-headers": "*", "access-control-max-age": "86400", "x-robots-tag": "noindex, nofollow, noarchive" });
+    res.writeHead(204, {
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
+      "access-control-allow-headers": "*",
+      "access-control-max-age": "86400"
+    });
     res.end();
     return;
   }
