@@ -6,6 +6,7 @@ import { validateTarget, validateRedirect } from "./policy.js";
 import { requestHeaders, responseHeaders } from "./headers.js";
 import { rewriteCss, rewriteHtml } from "./rewriter.js";
 import { runtimeScript } from "./runtime.js";
+import { serviceWorkerResponse } from "./service-worker.js";
 import { rewriteUrl } from "./url.js";
 
 const port = Number(process.env.PORT) || 8080;
@@ -135,7 +136,13 @@ async function handleRequest(req, res) {
   const url = new URL(req.url, "http://localhost");
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*" });
-    res.end(JSON.stringify({ status: "ok", version: "0.9.0" }));
+    res.end(JSON.stringify({ status: "ok", version: "0.9.1" }));
+    return;
+  }
+  if (url.pathname === "/service-worker.js") {
+    const response = serviceWorkerResponse();
+    res.writeHead(response.status, Object.fromEntries(response.headers));
+    res.end(await response.text());
     return;
   }
   if (req.method === "OPTIONS") {
