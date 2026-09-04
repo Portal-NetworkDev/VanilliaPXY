@@ -7,6 +7,7 @@ import { requestHeaders, responseHeaders } from "./headers.js";
 import { rewriteCss, rewriteHtml } from "./rewriter.js";
 import { runtimeScript } from "./runtime.js";
 import { serviceWorkerResponse } from "./service-worker.js";
+import { fetchSiteIcon } from "./icon.js";
 
 const port = Number(process.env.PORT) || 8080;
 const timeout = Number(process.env.UPSTREAM_TIMEOUT) || 30000;
@@ -117,9 +118,12 @@ async function proxyRequest(req, res, target, redirects = 0) {
     if (body === null) return sendError(res, 413, `Response exceeds rewrite limit (${Math.floor(maxRewriteSize / 1024 / 1024)} MiB)`);
     const type = String(upstream.headers["content-type"] || "").toLowerCase();
     const source = body.toString("utf8");
+    const iconHref = type.includes("text/html")
+      ? `/favicon?url=${encodeURIComponent(target.href)}`
+      : "";
     const rewritten = type.includes("text/css")
       ? rewriteCss(source, target.href, endpoint)
-      : rewriteHtml(source, target.href, endpoint, runtimeScript(endpoint, "/service-worker.js", target.href));
+      : rewriteHtml(source, target.href, endpoint, runtimeScript(endpoint, "/service-worker.js", target.href), iconHref);
     const output = Buffer.from(rewritten, "utf8");
     delete headersOut["content-length"];
     delete headersOut["content-encoding"];
@@ -171,7 +175,7 @@ async function handleRequest(req, res) {
       "x-robots-tag": "noindex, nofollow, noarchive",
       "access-control-allow-origin": "*"
     });
-    res.end(JSON.stringify({ status: "ok", version: "0.9.5" }));
+    res.end(JSON.stringify({ status: "ok", version: "0.9.6" }));
     return;
   }
   if (url.pathname === "/robots.txt") {
@@ -187,6 +191,38 @@ async function handleRequest(req, res) {
     const response = serviceWorkerResponse();
     res.writeHead(response.status, Object.fromEntries(response.headers));
     res.end(await response.text());
+    return;
+  }
+  if (url.pathname === "/api/icon") {
+    const rawTarget = url.searchParams.get("url");
+    const target = await validateTarget(rawTarget, allowPrivate);
+    if (!target) return sendError(res, 403, "Target is not allowed");
+    const icon = await fetchSiteIcon(target.href);
+    res.writeHead(icon ? 200 : 404, {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "public, max-age=3600",
+      "x-robots-tag": "noindex, nofollow, noarchive",
+      "access-control-allow-origin": "*"
+    });
+    res.end(JSON.stringify(icon ? {
+      url: target.href,
+      icon: `/favicon?url=${encodeURIComponent(target.href)}`
+    } : { url: target.href, icon: null }));
+    return;
+  }
+  if (url.pathname === "/favicon") {
+    const target = await validateTarget(url.searchParams.get("url"), allowPrivate);
+    if (!target) return sendError(res, 403, "Target is not allowed");
+    const icon = await fetchSiteIcon(target.href);
+    if (!icon) return sendError(res, 404, "Website icon not found");
+    res.writeHead(200, {
+      "content-type": String(icon.contentType).split(";")[0] || "application/octet-stream",
+      "cache-control": "public, max-age=3600",
+      "x-robots-tag": "noindex, nofollow, noarchive",
+      "access-control-allow-origin": "*",
+      "content-length": String(icon.body.length)
+    });
+    res.end(icon.body);
     return;
   }
   if (req.method === "OPTIONS") {
