@@ -22,12 +22,13 @@ export function requestHeaders(headers, target) {
   return result;
 }
 
-export function responseHeaders(headers) {
+export function responseHeaders(headers, { rewritten = false } = {}) {
   const result = {};
   for (const [name, value] of Object.entries(headers)) {
     const lower = name.toLowerCase();
     if (value == null || hopByHop.has(lower)) continue;
     if (restricted.has(lower)) continue;
+    if (rewritten && (lower === "content-security-policy" || lower === "content-security-policy-report-only")) continue;
     if (lower === "set-cookie") {
       result[name] = normalizeCookies(value);
       continue;
@@ -35,8 +36,6 @@ export function responseHeaders(headers) {
     result[name] = value;
   }
 
-  // The proxy hostname is a test/runtime endpoint, not content intended
-  // for search-engine indexing.
   result["x-robots-tag"] = "noindex, nofollow, noarchive";
   return result;
 }
