@@ -1,6 +1,6 @@
 {
   "name": "vanilliapxy",
-  "version": "0.5.0",
+  "version": "0.7.1",
   "description": "Streaming transport backend for browser-side web proxy engines",
   "type": "module",
   "engines": {
