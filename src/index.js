@@ -12,7 +12,9 @@ import { rewriteUrl } from "./url.js";
 const port = Number(process.env.PORT) || 8080;
 const timeout = Number(process.env.UPSTREAM_TIMEOUT) || 30000;
 const maxRedirects = Number(process.env.MAX_REDIRECTS) || 8;
-const maxRewriteSize = Number(process.env.MAX_REWRITE_SIZE) || 4 * 1024 * 1024;
+// Eaglercraft and other single-file web apps can be much larger than 4 MiB.
+// Keep this configurable, but use a 64 MiB default so large HTML apps are not rejected merely because they need rewriting.
+const maxRewriteSize = Number(process.env.MAX_REWRITE_SIZE) || 64 * 1024 * 1024;
 const maxHeaderSize = Number(process.env.MAX_HEADER_SIZE) || 32768;
 const maxWebSocketPayload = Number(process.env.MAX_WS_PAYLOAD) || 16 * 1024 * 1024;
 const allowPrivate = process.env.ALLOW_PRIVATE_TARGETS === "true";
@@ -90,7 +92,7 @@ async function proxyRequest(req, res, target, redirects = 0) {
       return;
     }
     const body = await bodyBuffer(upstream.body, maxRewriteSize);
-    if (body === null) return sendError(res, 413, "Response exceeds rewrite limit");
+    if (body === null) return sendError(res, 413, `Response exceeds rewrite limit (${Math.floor(maxRewriteSize / 1024 / 1024)} MiB)`);
     const type = String(upstream.headers["content-type"] || "").toLowerCase();
     const source = body.toString("utf8");
     const rewritten = type.includes("text/css") ? rewriteCss(source, target.href, endpoint) : rewriteHtml(source, target.href, endpoint, runtimeScript(endpoint));
@@ -136,7 +138,7 @@ async function handleRequest(req, res) {
   const url = new URL(req.url, "http://localhost");
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*" });
-    res.end(JSON.stringify({ status: "ok", version: "0.9.1" }));
+    res.end(JSON.stringify({ status: "ok", version: "0.9.2" }));
     return;
   }
   if (url.pathname === "/service-worker.js") {
