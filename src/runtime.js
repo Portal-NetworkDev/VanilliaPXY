@@ -4,16 +4,19 @@ const runtimeSource = String.raw`(() => {
   globalThis[marker] = true;
   const nativeFetch = globalThis.fetch?.bind(globalThis);
   const nativeOpen = XMLHttpRequest.prototype.open;
-  const base = document.baseURI;
+  const nativeEventSource = globalThis.EventSource;
+  const nativeWebSocket = globalThis.WebSocket;
+  const base = globalThis.__VANILLIAPXY_TARGET__ || document.baseURI;
   const endpoint = globalThis.__VANILLIAPXY_ENDPOINT__ || "/vanillia?url=";
   const workerEndpoint = globalThis.__VANILLIAPXY_SW__ || "/service-worker.js";
   const proxy = value => {
     if (typeof value !== "string" || !value) return value;
     const trimmed = value.trim();
-    if (/^(?:[a-z][a-z0-9+.-]*:|\\/\\/|#|data:|mailto:|javascript:|blob:|about:)/i.test(trimmed)) return value;
+    if (/^(?:data:|mailto:|javascript:|blob:|about:|#)/i.test(trimmed)) return value;
     try {
       const resolved = new URL(trimmed, base);
       if (!/^https?:$/.test(resolved.protocol)) return value;
+      if (resolved.origin === location.origin && resolved.pathname === "/vanillia") return resolved.href;
       return endpoint + encodeURIComponent(resolved.href);
     } catch { return value; }
   };
@@ -30,6 +33,28 @@ const runtimeSource = String.raw`(() => {
   XMLHttpRequest.prototype.open = function(method, url, ...rest) {
     return nativeOpen.call(this, method, proxy(String(url)), ...rest);
   };
+  if (nativeEventSource) {
+    globalThis.EventSource = class extends nativeEventSource {
+      constructor(url, options) { super(proxy(String(url)), options); }
+    };
+  }
+  if (nativeWebSocket) {
+    globalThis.WebSocket = class extends nativeWebSocket {
+      constructor(url, protocols) {
+        const value = String(url);
+        let next = value;
+        try {
+          const resolved = new URL(value, base);
+          if (/^wss?:$/.test(resolved.protocol)) {
+            const target = resolved.protocol === "wss:" ? "https:" : "http:";
+            const httpTarget = target + "//" + resolved.host + resolved.pathname + resolved.search;
+            next = new URL("/ws?url=" + encodeURIComponent(httpTarget), location.origin).href;
+          }
+        } catch {}
+        super(next, protocols);
+      }
+    };
+  }
   if (navigator.serviceWorker) {
     const nativeRegister = navigator.serviceWorker.register.bind(navigator.serviceWorker);
     navigator.serviceWorker.register = (scriptURL, options = {}) => {
@@ -46,6 +71,6 @@ const runtimeSource = String.raw`(() => {
   }
 })();`;
 
-export function runtimeScript(endpoint = "/vanillia?url=", workerEndpoint = "/service-worker.js") {
-  return `<script data-vanillia-runtime>globalThis.__VANILLIAPXY_ENDPOINT__=${JSON.stringify(endpoint)};globalThis.__VANILLIAPXY_SW__=${JSON.stringify(workerEndpoint)};${runtimeSource}</script>`;
+export function runtimeScript(endpoint = "/vanillia?url=", workerEndpoint = "/service-worker.js", target = "") {
+  return `<script data-vanillia-runtime>globalThis.__VANILLIAPXY_ENDPOINT__=${JSON.stringify(endpoint)};globalThis.__VANILLIAPXY_SW__=${JSON.stringify(workerEndpoint)};globalThis.__VANILLIAPXY_TARGET__=${JSON.stringify(target)};${runtimeSource}</script>`;
 }
