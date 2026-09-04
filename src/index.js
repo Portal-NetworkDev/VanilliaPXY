@@ -135,7 +135,7 @@ async function handleRequest(req, res) {
   const url = new URL(req.url, "http://localhost");
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*" });
-    res.end(JSON.stringify({ status: "ok", version: "0.8.2" }));
+    res.end(JSON.stringify({ status: "ok", version: "0.9.0" }));
     return;
   }
   if (req.method === "OPTIONS") {
