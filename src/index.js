@@ -18,6 +18,13 @@ const hopByHop = new Set([
   "upgrade"
 ]);
 
+const websocketHeaders = new Set([
+  "sec-websocket-key",
+  "sec-websocket-version",
+  "sec-websocket-extensions",
+  "sec-websocket-protocol"
+]);
+
 const server = http.createServer({ maxHeaderSize }, handleRequest);
 const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
 
@@ -38,8 +45,7 @@ function getTarget(req, parameter = "url") {
 function getWebSocketTarget(req) {
   const target = getTarget(req);
   if (!target) return null;
-  if (target.protocol === "http:") target.protocol = "ws:";
-  if (target.protocol === "https:") target.protocol = "wss:";
+  target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
   return target;
 }
 
@@ -48,6 +54,7 @@ function copyRequestHeaders(req, target, { websocket = false } = {}) {
   for (const [name, value] of Object.entries(req.headers)) {
     const lower = name.toLowerCase();
     if (value == null || hopByHop.has(lower) || lower === "host") continue;
+    if (websocket && websocketHeaders.has(lower)) continue;
     headers[name] = value;
   }
 
@@ -74,36 +81,21 @@ function sendError(res, status, message) {
   res.end(message);
 }
 
-function withTimeout(signal, ms) {
-  const controller = new AbortController();
-  const onAbort = () => controller.abort(signal.reason);
-  if (signal) {
-    if (signal.aborted) controller.abort(signal.reason);
-    else signal.addEventListener("abort", onAbort, { once: true });
-  }
-  const timer = setTimeout(() => controller.abort(new Error("timeout")), ms);
-  return {
-    signal: controller.signal,
-    clear() {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-    }
-  };
-}
-
 async function proxyRequest(req, res, target, redirects = 0) {
   if (redirects > maxRedirects) {
     sendError(res, 508, "Too many redirects");
     return;
   }
 
-  const timeoutState = withTimeout(req.signal, timeout);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+
   try {
     const upstream = await request(target, {
       method: req.method,
       headers: copyRequestHeaders(req, target),
       body: req.method === "GET" || req.method === "HEAD" ? null : req,
-      signal: timeoutState.signal,
+      signal: controller.signal,
       maxRedirections: 0,
       headersTimeout: timeout,
       bodyTimeout: 0
@@ -125,13 +117,13 @@ async function proxyRequest(req, res, target, redirects = 0) {
     upstream.body.on("error", () => res.destroy());
     upstream.body.pipe(res);
   } catch (error) {
-    if (error.name === "AbortError" || timeoutState.signal.aborted) {
+    if (error.name === "AbortError") {
       sendError(res, 504, "Upstream request timed out");
     } else {
       sendError(res, 502, "Unable to reach upstream");
     }
   } finally {
-    timeoutState.clear();
+    clearTimeout(timer);
   }
 }
 
@@ -161,7 +153,7 @@ function handleWebSocket(req, socket, head) {
     };
 
     upstream.on("open", () => {
-      if (client.readyState === WebSocket.OPEN) client.emit("open");
+      if (client.readyState !== WebSocket.OPEN) return;
     });
 
     upstream.on("message", (data, isBinary) => {
