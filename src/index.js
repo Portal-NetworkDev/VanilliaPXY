@@ -1,11 +1,15 @@
 import http from "node:http";
+import dns from "node:dns/promises";
+import net from "node:net";
 import { request } from "undici";
 import { WebSocketServer, WebSocket } from "ws";
 
 const port = Number(process.env.PORT) || 8080;
 const timeout = Number(process.env.UPSTREAM_TIMEOUT) || 30000;
-const maxRedirects = Number(process.env.MAX_REDIRECTS) || 10;
+const maxRedirects = Number(process.env.MAX_REDIRECTS) || 8;
 const maxHeaderSize = Number(process.env.MAX_HEADER_SIZE) || 32768;
+const maxWebSocketPayload = Number(process.env.MAX_WS_PAYLOAD) || 16 * 1024 * 1024;
+const allowPrivate = process.env.ALLOW_PRIVATE_TARGETS === "true";
 
 const hopByHop = new Set([
   "connection",
@@ -26,15 +30,16 @@ const websocketHeaders = new Set([
 ]);
 
 const server = http.createServer({ maxHeaderSize }, handleRequest);
-const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
+const wss = new WebSocketServer({ noServer: true, maxPayload: maxWebSocketPayload });
 
-function getTarget(req, parameter = "url") {
+function getTarget(req) {
   const requestUrl = new URL(req.url, "http://localhost");
-  const value = requestUrl.searchParams.get(parameter);
+  const value = requestUrl.searchParams.get("url");
   if (!value) return null;
 
   try {
     const target = new URL(value);
+    if (target.username || target.password) return null;
     if (target.protocol !== "http:" && target.protocol !== "https:") return null;
     return target;
   } catch {
@@ -42,11 +47,31 @@ function getTarget(req, parameter = "url") {
   }
 }
 
-function getWebSocketTarget(req) {
-  const target = getTarget(req);
-  if (!target) return null;
-  target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
-  return target;
+async function targetAllowed(target) {
+  if (allowPrivate) return true;
+  const hostname = target.hostname.toLowerCase();
+  if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "0.0.0.0") return false;
+  if (net.isIP(hostname)) return !isPrivateAddress(hostname);
+
+  try {
+    const records = await dns.lookup(hostname, { all: true, verbatim: true });
+    return records.length > 0 && records.every(({ address }) => !isPrivateAddress(address));
+  } catch {
+    return false;
+  }
+}
+
+function isPrivateAddress(address) {
+  if (net.isIPv4(address)) {
+    const [a, b] = address.split(".").map(Number);
+    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  }
+
+  const normalized = address.toLowerCase();
+  return normalized === "::1" || normalized === "::" || normalized.startsWith("fc") ||
+    normalized.startsWith("fd") || normalized.startsWith("fe80:") || normalized.startsWith("::ffff:127.") ||
+    normalized.startsWith("::ffff:10.") || normalized.startsWith("::ffff:192.168.");
 }
 
 function copyRequestHeaders(req, target, { websocket = false } = {}) {
@@ -59,16 +84,27 @@ function copyRequestHeaders(req, target, { websocket = false } = {}) {
   }
 
   headers.host = target.host;
-  if (!websocket) headers["x-forwarded-host"] = req.headers.host || "";
   return headers;
+}
+
+function rewriteSetCookie(value) {
+  if (typeof value !== "string") return value;
+  return value.replace(/;\s*Domain=[^;]*/gi, "");
 }
 
 function copyResponseHeaders(headers) {
   const result = {};
   for (const [name, value] of Object.entries(headers)) {
-    if (value == null || hopByHop.has(name.toLowerCase())) continue;
-    result[name] = value;
+    const lower = name.toLowerCase();
+    if (value == null || hopByHop.has(lower)) continue;
+    if (lower === "set-cookie") {
+      result[name] = Array.isArray(value) ? value.map(rewriteSetCookie) : rewriteSetCookie(value);
+    } else {
+      result[name] = value;
+    }
   }
+  result["access-control-allow-origin"] = "*";
+  result["access-control-expose-headers"] = "*";
   return result;
 }
 
@@ -76,7 +112,8 @@ function sendError(res, status, message) {
   if (res.headersSent) return res.destroy();
   res.writeHead(status, {
     "content-type": "text/plain; charset=utf-8",
-    "cache-control": "no-store"
+    "cache-control": "no-store",
+    "access-control-allow-origin": "*"
   });
   res.end(message);
 }
@@ -84,6 +121,11 @@ function sendError(res, status, message) {
 async function proxyRequest(req, res, target, redirects = 0) {
   if (redirects > maxRedirects) {
     sendError(res, 508, "Too many redirects");
+    return;
+  }
+
+  if (!(await targetAllowed(target))) {
+    sendError(res, 403, "Target is not allowed");
     return;
   }
 
@@ -102,7 +144,8 @@ async function proxyRequest(req, res, target, redirects = 0) {
     });
 
     const location = upstream.headers.location;
-    if (location && upstream.statusCode >= 300 && upstream.statusCode < 400) {
+    const canReplay = req.method === "GET" || req.method === "HEAD";
+    if (location && upstream.statusCode >= 300 && upstream.statusCode < 400 && canReplay) {
       upstream.body.resume();
       const next = new URL(location, target);
       if (next.protocol !== "http:" && next.protocol !== "https:") {
@@ -128,18 +171,25 @@ async function proxyRequest(req, res, target, redirects = 0) {
 }
 
 function handleWebSocket(req, socket, head) {
-  const target = getWebSocketTarget(req);
+  const target = getTarget(req);
   if (!target) {
     socket.write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
     socket.destroy();
     return;
   }
 
-  wss.handleUpgrade(req, socket, head, (client) => {
+  target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
+
+  wss.handleUpgrade(req, socket, head, async (client) => {
+    if (!(await targetAllowed(target))) {
+      client.close(1008, "Target is not allowed");
+      return;
+    }
+
     const upstream = new WebSocket(target, {
       headers: copyRequestHeaders(req, target, { websocket: true }),
       handshakeTimeout: timeout,
-      maxPayload: 16 * 1024 * 1024
+      maxPayload: maxWebSocketPayload
     });
 
     let closed = false;
@@ -153,7 +203,7 @@ function handleWebSocket(req, socket, head) {
     };
 
     upstream.on("open", () => {
-      if (client.readyState !== WebSocket.OPEN) return;
+      if (client.readyState !== WebSocket.OPEN) upstream.close();
     });
 
     upstream.on("message", (data, isBinary) => {
@@ -166,10 +216,9 @@ function handleWebSocket(req, socket, head) {
 
     client.on("close", (code, reason) => closeBoth(code, reason.toString()));
     upstream.on("close", (code, reason) => {
-      if (client.readyState === WebSocket.OPEN) client.close(code, reason);
       closed = true;
+      if (client.readyState === WebSocket.OPEN) client.close(code, reason);
     });
-
     client.on("error", () => closeBoth(1011, "client error"));
     upstream.on("error", () => closeBoth(1011, "upstream error"));
   });
@@ -181,9 +230,21 @@ async function handleRequest(req, res) {
   if (url.pathname === "/health") {
     res.writeHead(200, {
       "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store"
+      "cache-control": "no-store",
+      "access-control-allow-origin": "*"
     });
-    res.end(JSON.stringify({ status: "ok", version: "0.2.0" }));
+    res.end(JSON.stringify({ status: "ok", version: "0.3.0" }));
+    return;
+  }
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
+      "access-control-allow-headers": "*",
+      "access-control-max-age": "86400"
+    });
+    res.end();
     return;
   }
 
