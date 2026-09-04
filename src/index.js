@@ -13,18 +13,14 @@ const maxHeaderSize = Number(process.env.MAX_HEADER_SIZE) || 32768;
 const maxWebSocketPayload = Number(process.env.MAX_WS_PAYLOAD) || 16 * 1024 * 1024;
 const allowPrivate = process.env.ALLOW_PRIVATE_TARGETS === "true";
 const rewriteEnabled = process.env.REWRITE === "true";
-const endpoint = process.env.PROXY_ENDPOINT || "/proxy?url=";
+const endpoint = process.env.PROXY_ENDPOINT || "/vanillia?url=";
 
 const server = http.createServer({ maxHeaderSize }, handleRequest);
 const wss = new WebSocketServer({ noServer: true, maxPayload: maxWebSocketPayload });
 
 function sendError(res, status, message) {
   if (res.headersSent) return res.destroy();
-  res.writeHead(status, {
-    "content-type": "text/plain; charset=utf-8",
-    "cache-control": "no-store",
-    "access-control-allow-origin": "*"
-  });
+  res.writeHead(status, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*" });
   res.end(message);
 }
 
@@ -39,7 +35,6 @@ function bodyBuffer(stream, limit) {
     const chunks = [];
     let size = 0;
     let exceeded = false;
-
     stream.on("data", chunk => {
       if (exceeded) return;
       size += chunk.length;
@@ -51,23 +46,14 @@ function bodyBuffer(stream, limit) {
       }
       chunks.push(chunk);
     });
-    stream.on("end", () => {
-      if (!exceeded) resolve(Buffer.concat(chunks));
-    });
+    stream.on("end", () => { if (!exceeded) resolve(Buffer.concat(chunks)); });
     stream.on("error", reject);
   });
 }
 
 async function proxyRequest(req, res, target, redirects = 0) {
-  if (redirects > maxRedirects) {
-    sendError(res, 508, "Too many redirects");
-    return;
-  }
-
-  if (!(await isTargetAllowed(target, allowPrivate))) {
-    sendError(res, 403, "Target is not allowed");
-    return;
-  }
+  if (redirects > maxRedirects) return sendError(res, 508, "Too many redirects");
+  if (!(await isTargetAllowed(target, allowPrivate))) return sendError(res, 403, "Target is not allowed");
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
@@ -90,17 +76,12 @@ async function proxyRequest(req, res, target, redirects = 0) {
     if (location && upstream.statusCode >= 300 && upstream.statusCode < 400 && replayable) {
       upstream.body.resume();
       const next = resolveRedirect(location, target);
-      if (!next) {
-        sendError(res, 502, "Unsupported redirect");
-        return;
-      }
-      await proxyRequest(req, res, next, redirects + 1);
-      return;
+      if (!next) return sendError(res, 502, "Unsupported redirect");
+      return proxyRequest(req, res, next, redirects + 1);
     }
 
     const headersOut = responseHeaders(upstream.headers);
     const shouldRewrite = canRewrite(upstream.headers) && ![204, 304].includes(upstream.statusCode);
-
     if (!shouldRewrite) {
       res.writeHead(upstream.statusCode, headersOut);
       upstream.body.on("error", () => res.destroy());
@@ -109,26 +90,18 @@ async function proxyRequest(req, res, target, redirects = 0) {
     }
 
     const body = await bodyBuffer(upstream.body, maxRewriteSize);
-    if (body === null) {
-      sendError(res, 413, "Response exceeds rewrite limit");
-      return;
-    }
-
+    if (body === null) return sendError(res, 413, "Response exceeds rewrite limit");
     const type = String(upstream.headers["content-type"] || "").toLowerCase();
     const source = body.toString("utf8");
-    const rewritten = type.includes("text/css")
-      ? rewriteCss(source, target.href, endpoint)
-      : rewriteHtml(source, target.href, endpoint);
+    const rewritten = type.includes("text/css") ? rewriteCss(source, target.href, endpoint) : rewriteHtml(source, target.href, endpoint);
     const output = Buffer.from(rewritten, "utf8");
-
     delete headersOut["content-length"];
     delete headersOut["content-encoding"];
     headersOut["content-length"] = String(output.length);
     res.writeHead(upstream.statusCode, headersOut);
     res.end(output);
   } catch (error) {
-    if (error.name === "AbortError") sendError(res, 504, "Upstream request timed out");
-    else sendError(res, 502, "Unable to reach upstream");
+    sendError(res, error.name === "AbortError" ? 504 : 502, error.name === "AbortError" ? "Upstream request timed out" : "Unable to reach upstream");
   } finally {
     clearTimeout(timer);
   }
@@ -142,45 +115,22 @@ function handleWebSocket(req, socket, head) {
     socket.destroy();
     return;
   }
-
   target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
-
   wss.handleUpgrade(req, socket, head, async client => {
-    if (!(await isTargetAllowed(target, allowPrivate))) {
-      client.close(1008, "Target is not allowed");
-      return;
-    }
-
-    const upstream = new WebSocket(target, {
-      headers: requestHeaders(req.headers, target),
-      handshakeTimeout: timeout,
-      maxPayload: maxWebSocketPayload
-    });
-
+    if (!(await isTargetAllowed(target, allowPrivate))) return client.close(1008, "Target is not allowed");
+    const upstream = new WebSocket(target, { headers: requestHeaders(req.headers, target), handshakeTimeout: timeout, maxPayload: maxWebSocketPayload });
     let closed = false;
     const closeBoth = (code = 1000, reason = "") => {
       if (closed) return;
       closed = true;
-      if (client.readyState === WebSocket.OPEN) client.close(code, reason);
-      else client.terminate();
-      if (upstream.readyState === WebSocket.OPEN) upstream.close(code, reason);
-      else if (upstream.readyState === WebSocket.CONNECTING) upstream.terminate();
+      if (client.readyState === WebSocket.OPEN) client.close(code, reason); else client.terminate();
+      if (upstream.readyState === WebSocket.OPEN) upstream.close(code, reason); else if (upstream.readyState === WebSocket.CONNECTING) upstream.terminate();
     };
-
-    upstream.on("open", () => {
-      if (client.readyState !== WebSocket.OPEN) closeBoth();
-    });
-    upstream.on("message", (data, binary) => {
-      if (client.readyState === WebSocket.OPEN) client.send(data, { binary });
-    });
-    client.on("message", (data, binary) => {
-      if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary });
-    });
+    upstream.on("open", () => { if (client.readyState !== WebSocket.OPEN) closeBoth(); });
+    upstream.on("message", (data, binary) => { if (client.readyState === WebSocket.OPEN) client.send(data, { binary }); });
+    client.on("message", (data, binary) => { if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary }); });
     client.on("close", (code, reason) => closeBoth(code, reason.toString()));
-    upstream.on("close", (code, reason) => {
-      closed = true;
-      if (client.readyState === WebSocket.OPEN) client.close(code, reason);
-    });
+    upstream.on("close", (code, reason) => { closed = true; if (client.readyState === WebSocket.OPEN) client.close(code, reason); });
     client.on("error", () => closeBoth(1011, "client error"));
     upstream.on("error", () => closeBoth(1011, "upstream error"));
   });
@@ -188,47 +138,24 @@ function handleWebSocket(req, socket, head) {
 
 async function handleRequest(req, res) {
   const url = new URL(req.url, "http://localhost");
-
   if (url.pathname === "/health") {
-    res.writeHead(200, {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-      "access-control-allow-origin": "*"
-    });
-    res.end(JSON.stringify({ status: "ok", version: "0.4.0" }));
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*" });
+    res.end(JSON.stringify({ status: "ok", version: "0.5.0" }));
     return;
   }
-
   if (req.method === "OPTIONS") {
-    res.writeHead(204, {
-      "access-control-allow-origin": "*",
-      "access-control-allow-methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
-      "access-control-allow-headers": "*",
-      "access-control-max-age": "86400"
-    });
+    res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS", "access-control-allow-headers": "*", "access-control-max-age": "86400" });
     res.end();
     return;
   }
-
-  if (url.pathname !== "/proxy") {
-    sendError(res, 404, "Not found");
-    return;
-  }
-
+  if (url.pathname !== "/vanillia") return sendError(res, 404, "Not found");
   const target = parseTarget(url.searchParams.get("url"));
-  if (!target) {
-    sendError(res, 400, "A valid http(s) url is required");
-    return;
-  }
-
+  if (!target) return sendError(res, 400, "A valid http(s) url is required");
   await proxyRequest(req, res, target);
 }
 
 server.on("upgrade", (req, socket, head) => {
-  if (new URL(req.url, "http://localhost").pathname !== "/ws") {
-    socket.destroy();
-    return;
-  }
+  if (new URL(req.url, "http://localhost").pathname !== "/ws") return socket.destroy();
   handleWebSocket(req, socket, head);
 });
 
