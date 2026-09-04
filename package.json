@@ -1,12 +1,15 @@
 {
   "name": "vanilliapxy",
   "version": "0.1.0",
-  "private": false,
+  "description": "Streaming HTTP transport for browser-side web proxy engines",
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "start": "node src/index.js"
+  },
+  "dependencies": {
+    "undici": "^7.16.0"
   }
 }
