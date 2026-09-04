@@ -4,6 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { validateTarget, validateRedirect } from "./policy.js";
 import { requestHeaders, responseHeaders } from "./headers.js";
 import { rewriteCss, rewriteHtml } from "./rewriter.js";
+import { runtimeScript } from "./runtime.js";
 import { rewriteUrl } from "./url.js";
 
 const port = Number(process.env.PORT) || 8080;
@@ -13,7 +14,7 @@ const maxRewriteSize = Number(process.env.MAX_REWRITE_SIZE) || 4 * 1024 * 1024;
 const maxHeaderSize = Number(process.env.MAX_HEADER_SIZE) || 32768;
 const maxWebSocketPayload = Number(process.env.MAX_WS_PAYLOAD) || 16 * 1024 * 1024;
 const allowPrivate = process.env.ALLOW_PRIVATE_TARGETS === "true";
-const rewriteEnabled = process.env.REWRITE === "true";
+const rewriteEnabled = process.env.REWRITE !== "false";
 const endpoint = process.env.PROXY_ENDPOINT || "/vanillia?url=";
 
 const server = http.createServer({ maxHeaderSize }, handleRequest);
@@ -26,9 +27,8 @@ function sendError(res, status, message) {
 }
 
 function canRewrite(headers) {
-  if (!rewriteEnabled) return false;
   const type = String(headers["content-type"] || "").toLowerCase();
-  return type.includes("text/html") || type.includes("text/css");
+  return rewriteEnabled && (type.includes("text/html") || type.includes("text/css"));
 }
 
 function bodyBuffer(stream, limit) {
@@ -56,23 +56,12 @@ async function proxyRequest(req, res, target, redirects = 0) {
   if (redirects > maxRedirects) return sendError(res, 508, "Too many redirects");
   const allowed = await validateTarget(target.href, allowPrivate);
   if (!allowed) return sendError(res, 403, "Target is not allowed");
-
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   const headers = requestHeaders(req.headers, target);
   if (rewriteEnabled) headers["accept-encoding"] = "identity";
-
   try {
-    const upstream = await request(target, {
-      method: req.method,
-      headers,
-      body: req.method === "GET" || req.method === "HEAD" ? null : req,
-      signal: controller.signal,
-      maxRedirections: 0,
-      headersTimeout: timeout,
-      bodyTimeout: 0
-    });
-
+    const upstream = await request(target, { method: req.method, headers, body: req.method === "GET" || req.method === "HEAD" ? null : req, signal: controller.signal, maxRedirections: 0, headersTimeout: timeout, bodyTimeout: 0 });
     const location = upstream.headers.location;
     const replayable = req.method === "GET" || req.method === "HEAD";
     if (location && upstream.statusCode >= 300 && upstream.statusCode < 400 && replayable) {
@@ -82,26 +71,23 @@ async function proxyRequest(req, res, target, redirects = 0) {
       if (!next) return sendError(res, 403, "Redirect target is not allowed");
       return proxyRequest(req, res, next, redirects + 1);
     }
-
     const headersOut = responseHeaders(upstream.headers);
     if (location && rewriteEnabled) {
       const redirect = await validateRedirect(location, target, allowPrivate);
       if (!redirect) return sendError(res, 403, "Redirect target is not allowed");
       headersOut.location = rewriteUrl(redirect.href, target, endpoint);
     }
-    const shouldRewrite = canRewrite(upstream.headers) && ![204, 304].includes(upstream.statusCode);
-    if (!shouldRewrite) {
+    if (!canRewrite(upstream.headers) || [204, 304].includes(upstream.statusCode)) {
       res.writeHead(upstream.statusCode, headersOut);
       upstream.body.on("error", () => res.destroy());
       upstream.body.pipe(res);
       return;
     }
-
     const body = await bodyBuffer(upstream.body, maxRewriteSize);
     if (body === null) return sendError(res, 413, "Response exceeds rewrite limit");
     const type = String(upstream.headers["content-type"] || "").toLowerCase();
     const source = body.toString("utf8");
-    const rewritten = type.includes("text/css") ? rewriteCss(source, target.href, endpoint) : rewriteHtml(source, target.href, endpoint);
+    const rewritten = type.includes("text/css") ? rewriteCss(source, target.href, endpoint) : rewriteHtml(source, target.href, endpoint, runtimeScript(endpoint));
     const output = Buffer.from(rewritten, "utf8");
     delete headersOut["content-length"];
     delete headersOut["content-encoding"];
@@ -144,7 +130,7 @@ async function handleRequest(req, res) {
   const url = new URL(req.url, "http://localhost");
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*" });
-    res.end(JSON.stringify({ status: "ok", version: "0.7.0" }));
+    res.end(JSON.stringify({ status: "ok", version: "0.8.0" }));
     return;
   }
   if (req.method === "OPTIONS") {
