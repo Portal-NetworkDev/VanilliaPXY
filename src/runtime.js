@@ -6,6 +6,8 @@ const runtimeSource = String.raw`(() => {
   const nativeOpen = XMLHttpRequest.prototype.open;
   const nativeEventSource = globalThis.EventSource;
   const nativeWebSocket = globalThis.WebSocket;
+  const nativeWindowPostMessage = globalThis.postMessage?.bind(globalThis);
+  const nativeWindowPrototypePostMessage = globalThis.Window?.prototype?.postMessage;
   const base = globalThis.__VANILLIAPXY_TARGET__ || document.baseURI;
   const endpoint = globalThis.__VANILLIAPXY_ENDPOINT__ || "/vanillia?url=";
   const workerEndpoint = globalThis.__VANILLIAPXY_SW__ || "/service-worker.js";
@@ -19,6 +21,15 @@ const runtimeSource = String.raw`(() => {
       if (resolved.origin === location.origin && resolved.pathname === "/vanillia") return resolved.href;
       return endpoint + encodeURIComponent(resolved.href);
     } catch { return value; }
+  };
+  const messageTarget = value => {
+    if (typeof value !== "string" || value === "*") return value;
+    try {
+      const origin = new URL(value, base).origin;
+      return origin === location.origin ? value : "*";
+    } catch {
+      return value;
+    }
   };
   if (nativeFetch) {
     globalThis.fetch = (input, init) => {
@@ -54,6 +65,33 @@ const runtimeSource = String.raw`(() => {
         super(next, protocols);
       }
     };
+  }
+  if (nativeWindowPostMessage && globalThis.Window?.prototype) {
+    const postMessage = function(message, targetOrigin, transfer) {
+      const nextOrigin = messageTarget(targetOrigin);
+      if (arguments.length >= 3) return nativeWindowPrototypePostMessage.call(this, message, nextOrigin, transfer);
+      return nativeWindowPrototypePostMessage.call(this, message, nextOrigin);
+    };
+    try { globalThis.Window.prototype.postMessage = postMessage; } catch {}
+    try { globalThis.postMessage = postMessage.bind(globalThis); } catch {}
+  }
+  if (globalThis.MessagePort?.prototype?.postMessage) {
+    const nativePortPostMessage = globalThis.MessagePort.prototype.postMessage;
+    try {
+      globalThis.MessagePort.prototype.postMessage = function(message, transfer) {
+        return arguments.length > 1
+          ? nativePortPostMessage.call(this, message, transfer)
+          : nativePortPostMessage.call(this, message);
+      };
+    } catch {}
+  }
+  if (globalThis.BroadcastChannel?.prototype?.postMessage) {
+    const nativeBroadcastPostMessage = globalThis.BroadcastChannel.prototype.postMessage;
+    try {
+      globalThis.BroadcastChannel.prototype.postMessage = function(message) {
+        return nativeBroadcastPostMessage.call(this, message);
+      };
+    } catch {}
   }
   if (navigator.serviceWorker) {
     const nativeRegister = navigator.serviceWorker.register.bind(navigator.serviceWorker);
