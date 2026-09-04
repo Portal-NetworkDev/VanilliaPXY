@@ -1,7 +1,7 @@
 import http from "node:http";
 import { request } from "undici";
 import { WebSocketServer, WebSocket } from "ws";
-import { parseTarget, isTargetAllowed } from "./target.js";
+import { validateTarget, validateRedirect } from "./policy.js";
 import { requestHeaders, responseHeaders } from "./headers.js";
 import { rewriteCss, rewriteHtml } from "./rewriter.js";
 import { rewriteUrl } from "./url.js";
@@ -54,7 +54,8 @@ function bodyBuffer(stream, limit) {
 
 async function proxyRequest(req, res, target, redirects = 0) {
   if (redirects > maxRedirects) return sendError(res, 508, "Too many redirects");
-  if (!(await isTargetAllowed(target, allowPrivate))) return sendError(res, 403, "Target is not allowed");
+  const allowed = await validateTarget(target.href, allowPrivate);
+  if (!allowed) return sendError(res, 403, "Target is not allowed");
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
@@ -77,14 +78,17 @@ async function proxyRequest(req, res, target, redirects = 0) {
     if (location && upstream.statusCode >= 300 && upstream.statusCode < 400 && replayable) {
       upstream.body.resume();
       if (redirects >= maxRedirects) return sendError(res, 508, "Too many redirects");
-      let next;
-      try { next = new URL(location, target); } catch { return sendError(res, 502, "Invalid redirect"); }
-      if (!(next.protocol === "http:" || next.protocol === "https:")) return sendError(res, 502, "Unsupported redirect");
+      const next = await validateRedirect(location, target, allowPrivate);
+      if (!next) return sendError(res, 403, "Redirect target is not allowed");
       return proxyRequest(req, res, next, redirects + 1);
     }
 
     const headersOut = responseHeaders(upstream.headers);
-    if (location && rewriteEnabled) headersOut.location = rewriteUrl(new URL(location, target).href, target, endpoint);
+    if (location && rewriteEnabled) {
+      const redirect = await validateRedirect(location, target, allowPrivate);
+      if (!redirect) return sendError(res, 403, "Redirect target is not allowed");
+      headersOut.location = rewriteUrl(redirect.href, target, endpoint);
+    }
     const shouldRewrite = canRewrite(upstream.headers) && ![204, 304].includes(upstream.statusCode);
     if (!shouldRewrite) {
       res.writeHead(upstream.statusCode, headersOut);
@@ -113,15 +117,11 @@ async function proxyRequest(req, res, target, redirects = 0) {
 
 function handleWebSocket(req, socket, head) {
   const requestUrl = new URL(req.url, "http://localhost");
-  const target = parseTarget(requestUrl.searchParams.get("url"));
-  if (!target) {
-    socket.write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
-    socket.destroy();
-    return;
-  }
-  target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
+  const rawTarget = requestUrl.searchParams.get("url");
   wss.handleUpgrade(req, socket, head, async client => {
-    if (!(await isTargetAllowed(target, allowPrivate))) return client.close(1008, "Target is not allowed");
+    const target = await validateTarget(rawTarget, allowPrivate);
+    if (!target) return client.close(1008, "Target is not allowed");
+    target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
     const upstream = new WebSocket(target, { headers: requestHeaders(req.headers, target), handshakeTimeout: timeout, maxPayload: maxWebSocketPayload });
     let closed = false;
     const closeBoth = (code = 1000, reason = "") => {
@@ -144,7 +144,7 @@ async function handleRequest(req, res) {
   const url = new URL(req.url, "http://localhost");
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*" });
-    res.end(JSON.stringify({ status: "ok", version: "0.6.0" }));
+    res.end(JSON.stringify({ status: "ok", version: "0.7.0" }));
     return;
   }
   if (req.method === "OPTIONS") {
@@ -153,8 +153,8 @@ async function handleRequest(req, res) {
     return;
   }
   if (url.pathname !== "/vanillia") return sendError(res, 404, "Not found");
-  const target = parseTarget(url.searchParams.get("url"));
-  if (!target) return sendError(res, 400, "A valid http(s) url is required");
+  const target = await validateTarget(url.searchParams.get("url"), allowPrivate);
+  if (!target) return sendError(res, 403, "Target is not allowed");
   await proxyRequest(req, res, target);
 }
 
