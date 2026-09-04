@@ -34,6 +34,10 @@ export function responseHeaders(headers) {
     }
     result[name] = value;
   }
+
+  // The proxy hostname is a test/runtime endpoint, not content intended
+  // for search-engine indexing.
+  result["x-robots-tag"] = "noindex, nofollow, noarchive";
   return result;
 }
 
