@@ -8,6 +8,7 @@ const runtimeSource = String.raw`(() => {
   const nativeWebSocket = globalThis.WebSocket;
   const nativeWindowPostMessage = globalThis.postMessage?.bind(globalThis);
   const nativeWindowPrototypePostMessage = globalThis.Window?.prototype?.postMessage;
+  const nativeSetAttribute = globalThis.Element?.prototype?.setAttribute;
   const base = globalThis.__VANILLIAPXY_TARGET__ || document.baseURI;
   const endpoint = globalThis.__VANILLIAPXY_ENDPOINT__ || "/vanillia?url=";
   const workerEndpoint = globalThis.__VANILLIAPXY_SW__ || "/service-worker.js";
@@ -15,12 +16,28 @@ const runtimeSource = String.raw`(() => {
     if (typeof value !== "string" || !value) return value;
     const trimmed = value.trim();
     if (/^(?:data:|mailto:|javascript:|blob:|about:|#)/i.test(trimmed)) return value;
+    if (isProxyUrl(trimmed)) return value;
     try {
       const resolved = new URL(trimmed, base);
       if (!/^https?:$/.test(resolved.protocol)) return value;
-      if (resolved.origin === location.origin && resolved.pathname === "/vanillia") return resolved.href;
       return endpoint + encodeURIComponent(resolved.href);
     } catch { return value; }
+  };
+  const proxySrcset = value => {
+    if (typeof value !== "string") return value;
+    return value.split(",").map(candidate => {
+      const match = candidate.trim().match(/^(\S+)(\s+.+)?$/);
+      if (!match) return candidate;
+      return `${proxy(match[1])}${match[2] || ""}`;
+    }).join(", ");
+  };
+  const isProxyUrl = value => {
+    try {
+      const resolved = new URL(value, location.href);
+      return resolved.origin === location.origin && resolved.pathname === "/vanillia";
+    } catch {
+      return false;
+    }
   };
   const messageTarget = value => {
     if (typeof value !== "string" || value === "*") return value;
@@ -31,6 +48,53 @@ const runtimeSource = String.raw`(() => {
       return value;
     }
   };
+  const installUrlProperty = (prototype, property) => {
+    if (!prototype) return;
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, property);
+    if (!descriptor?.get || !descriptor?.set) return;
+    try {
+      Object.defineProperty(prototype, property, {
+        configurable: descriptor.configurable,
+        enumerable: descriptor.enumerable,
+        get: descriptor.get,
+        set(value) { return descriptor.set.call(this, proxy(String(value))); }
+      });
+    } catch {}
+  };
+  const installSrcsetProperty = (prototype) => {
+    if (!prototype) return;
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, "srcset");
+    if (!descriptor?.get || !descriptor?.set) return;
+    try {
+      Object.defineProperty(prototype, "srcset", {
+        configurable: descriptor.configurable,
+        enumerable: descriptor.enumerable,
+        get: descriptor.get,
+        set(value) { return descriptor.set.call(this, proxySrcset(String(value))); }
+      });
+    } catch {}
+  };
+  if (globalThis.Element?.prototype && nativeSetAttribute) {
+    try {
+      globalThis.Element.prototype.setAttribute = function(name, value) {
+        const lower = String(name).toLowerCase();
+        if (lower === "srcset") value = proxySrcset(String(value));
+        else if (["src", "href", "poster", "data"].includes(lower)) value = proxy(String(value));
+        return nativeSetAttribute.call(this, name, value);
+      };
+    } catch {}
+  }
+  installUrlProperty(globalThis.HTMLImageElement?.prototype, "src");
+  installSrcsetProperty(globalThis.HTMLImageElement?.prototype);
+  installUrlProperty(globalThis.HTMLIFrameElement?.prototype, "src");
+  installUrlProperty(globalThis.HTMLScriptElement?.prototype, "src");
+  installUrlProperty(globalThis.HTMLLinkElement?.prototype, "href");
+  installUrlProperty(globalThis.HTMLSourceElement?.prototype, "src");
+  installSrcsetProperty(globalThis.HTMLSourceElement?.prototype);
+  installUrlProperty(globalThis.HTMLVideoElement?.prototype, "poster");
+  installUrlProperty(globalThis.HTMLMediaElement?.prototype, "src");
+  installUrlProperty(globalThis.HTMLObjectElement?.prototype, "data");
+  installUrlProperty(globalThis.HTMLEmbedElement?.prototype, "src");
   if (nativeFetch) {
     globalThis.fetch = (input, init) => {
       if (typeof input === "string" || input instanceof URL) return nativeFetch(proxy(String(input)), init);
