@@ -13,6 +13,17 @@ const runtimeSource = String.raw`(() => {
   const nativeCssText = globalThis.CSSStyleDeclaration
     ? Object.getOwnPropertyDescriptor(globalThis.CSSStyleDeclaration.prototype, "cssText")
     : null;
+  const nativeInnerHTML = globalThis.Element
+    ? Object.getOwnPropertyDescriptor(globalThis.Element.prototype, "innerHTML")
+    : null;
+  const nativeOuterHTML = globalThis.Element
+    ? Object.getOwnPropertyDescriptor(globalThis.Element.prototype, "outerHTML")
+    : null;
+  const nativeInsertAdjacentHTML = globalThis.Element?.prototype?.insertAdjacentHTML;
+  const nativeDocumentWrite = globalThis.Document?.prototype?.write;
+  const nativeDocumentWriteln = globalThis.Document?.prototype?.writeln;
+  const nativeCreateContextualFragment = globalThis.Range?.prototype?.createContextualFragment;
+  const nativeParseFromString = globalThis.DOMParser?.prototype?.parseFromString;
   const base = globalThis.__VANILLIAPXY_TARGET__ || document.baseURI;
   const endpoint = globalThis.__VANILLIAPXY_ENDPOINT__ || "/vanillia?url=";
   const workerEndpoint = globalThis.__VANILLIAPXY_SW__ || "/service-worker.js";
@@ -30,14 +41,30 @@ const runtimeSource = String.raw`(() => {
   const proxySrcset = value => {
     if (typeof value !== "string") return value;
     return value.split(",").map(candidate => {
-      const match = candidate.trim().match(/^(\\S+)(\\s+.+)?$/);
+      const match = candidate.trim().match(/^(\S+)(\s+.+)?$/);
       if (!match) return candidate;
       return proxy(match[1]) + (match[2] || "");
     }).join(", ");
   };
-  const proxyCss = value => String(value ?? "").replace(/url(\\s*\\(\\s*)(["']?)(.*?)(\\2)(\\s*\\))/gi,
+  const proxyCss = value => String(value ?? "").replace(/url(\s*\(\s*)(["']?)(.*?)(\2)(\s*\))/gi,
     (match, prefix, quote, url, closingQuote, suffix) => prefix + quote + proxy(url) + closingQuote + suffix
   );
+  const proxyMarkup = value => {
+    let markup = String(value ?? "");
+    markup = markup.replace(/(\b(?:href|src|poster|cite|formaction|manifest|ping|background|data)\s*=\s*)(["'])(.*?)(\2)/gi,
+      (match, prefix, quote, url, closing) => prefix + quote + proxy(url) + closing
+    );
+    markup = markup.replace(/(\bsrcset\s*=\s*)(["'])(.*?)(\2)/gi,
+      (match, prefix, quote, value, closing) => prefix + quote + proxySrcset(value) + closing
+    );
+    markup = markup.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi,
+      (match, open, css, close) => open + proxyCss(css) + close
+    );
+    markup = markup.replace(/(\bstyle\s*=\s*)(["'])(.*?)(\2)/gi,
+      (match, prefix, quote, value, closing) => prefix + quote + proxyCss(value) + closing
+    );
+    return markup;
+  };
   const isProxyUrl = value => {
     try {
       const resolved = new URL(value, location.href);
@@ -89,6 +116,63 @@ const runtimeSource = String.raw`(() => {
         else if (["src", "href", "poster", "data"].includes(lower)) value = proxy(String(value));
         else if (lower === "style") value = proxyCss(String(value));
         return nativeSetAttribute.call(this, name, value);
+      };
+    } catch {}
+  }
+  if (globalThis.Element?.prototype && nativeInnerHTML?.get && nativeInnerHTML?.set) {
+    try {
+      Object.defineProperty(globalThis.Element.prototype, "innerHTML", {
+        configurable: nativeInnerHTML.configurable,
+        enumerable: nativeInnerHTML.enumerable,
+        get: nativeInnerHTML.get,
+        set(value) { return nativeInnerHTML.set.call(this, proxyMarkup(value)); }
+      });
+    } catch {}
+  }
+  if (globalThis.Element?.prototype && nativeOuterHTML?.get && nativeOuterHTML?.set) {
+    try {
+      Object.defineProperty(globalThis.Element.prototype, "outerHTML", {
+        configurable: nativeOuterHTML.configurable,
+        enumerable: nativeOuterHTML.enumerable,
+        get: nativeOuterHTML.get,
+        set(value) { return nativeOuterHTML.set.call(this, proxyMarkup(value)); }
+      });
+    } catch {}
+  }
+  if (globalThis.Element?.prototype && nativeInsertAdjacentHTML) {
+    try {
+      globalThis.Element.prototype.insertAdjacentHTML = function(position, html) {
+        return nativeInsertAdjacentHTML.call(this, position, proxyMarkup(html));
+      };
+    } catch {}
+  }
+  if (globalThis.Document?.prototype) {
+    if (nativeDocumentWrite) {
+      try {
+        globalThis.Document.prototype.write = function(...args) {
+          return nativeDocumentWrite.apply(this, args.map(proxyMarkup));
+        };
+      } catch {}
+    }
+    if (nativeDocumentWriteln) {
+      try {
+        globalThis.Document.prototype.writeln = function(...args) {
+          return nativeDocumentWriteln.apply(this, args.map(proxyMarkup));
+        };
+      } catch {}
+    }
+  }
+  if (globalThis.Range?.prototype && nativeCreateContextualFragment) {
+    try {
+      globalThis.Range.prototype.createContextualFragment = function(html) {
+        return nativeCreateContextualFragment.call(this, proxyMarkup(html));
+      };
+    } catch {}
+  }
+  if (globalThis.DOMParser?.prototype && nativeParseFromString) {
+    try {
+      globalThis.DOMParser.prototype.parseFromString = function(input, type, ...rest) {
+        return nativeParseFromString.call(this, type === "text/html" ? proxyMarkup(input) : input, type, ...rest);
       };
     } catch {}
   }
