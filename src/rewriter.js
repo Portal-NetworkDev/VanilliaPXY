@@ -59,6 +59,14 @@ export function rewriteHtml(text, base, endpoint = "/vanillia?url=", runtime = "
     return block;
   });
 
+  if (/<base\b/i.test(output)) {
+    output = output.replace(/<base\b[^>]*>/i, `<base href="${escapeAttribute(base)}">`);
+  } else if (/<head\b[^>]*>/i.test(output)) {
+    output = output.replace(/<head\b[^>]*>/i, match => `${match}<base href="${escapeAttribute(base)}">`);
+  } else {
+    output = `<base href="${escapeAttribute(base)}">${output}`;
+  }
+
   if (iconHref) {
     const iconTag = `<link rel="icon" data-vanillia-icon="true" href="${iconHref}">`;
     if (/<\/head\s*>/i.test(output)) output = output.replace(/<\/head\s*>/i, `${iconTag}</head>`);
@@ -68,4 +76,10 @@ export function rewriteHtml(text, base, endpoint = "/vanillia?url=", runtime = "
   if (runtime && /<\/head\s*>/i.test(output)) output = output.replace(/<\/head\s*>/i, `${runtime}</head>`);
   else if (runtime) output = `${runtime}${output}`;
   return output;
+}
+
+function escapeAttribute(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;");
 }
