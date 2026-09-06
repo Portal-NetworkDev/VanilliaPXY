@@ -73,6 +73,15 @@ const runtimeSource = String.raw`(() => {
       return false;
     }
   };
+  const unproxy = value => {
+    try {
+      const resolved = new URL(value, location.href);
+      if (resolved.origin !== location.origin || resolved.pathname !== "/vanillia") return null;
+      return resolved.searchParams.get("url");
+    } catch {
+      return null;
+    }
+  };
   const messageTarget = value => {
     if (typeof value !== "string" || value === "*") return value;
     try {
@@ -206,6 +215,26 @@ const runtimeSource = String.raw`(() => {
   installUrlProperty(globalThis.HTMLMediaElement?.prototype, "src");
   installUrlProperty(globalThis.HTMLObjectElement?.prototype, "data");
   installUrlProperty(globalThis.HTMLEmbedElement?.prototype, "src");
+  if (globalThis.HTMLFormElement) {
+    document.addEventListener("submit", event => {
+      const form = event.target;
+      if (!(form instanceof HTMLFormElement)) return;
+      if (String(form.method || "get").toLowerCase() !== "get") return;
+      const action = form.getAttribute("action") || document.baseURI;
+      const target = unproxy(action) || new URL(action, base).href;
+      if (!/^https?:$/i.test(new URL(target, base).protocol)) return;
+      const destination = new URL(target, base);
+      const data = new FormData(form);
+      for (const [name, value] of data.entries()) {
+        if (typeof value === "string") destination.searchParams.append(name, value);
+      }
+      event.preventDefault();
+      const next = proxy(destination.href);
+      const targetName = form.target || "_self";
+      if (targetName === "_blank") globalThis.open(next, "_blank", "noopener");
+      else location.assign(next);
+    }, true);
+  }
   if (nativeFetch) {
     globalThis.fetch = (input, init) => {
       if (typeof input === "string" || input instanceof URL) return nativeFetch(proxy(String(input)), init);
