@@ -1,5 +1,5 @@
 const protocols = new Set(["http:", "https:"]);
-const skip = /^(?:[a-z][a-z0-9+.-]*:|\/\/|#|data:|mailto:|javascript:|blob:|about:)/i;
+const skip = /^(?:[a-z][a-z0-9+.-]*:|#|data:|mailto:|javascript:|blob:|about:)/i;
 
 export function rewriteUrl(value, base, endpoint = "/vanillia?url=") {
   const input = String(value ?? "").trim();
