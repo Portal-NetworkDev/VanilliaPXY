@@ -71,11 +71,18 @@ async function streamBuffer(res, buffer) {
   }
 }
 
+function proxyOrigin(req) {
+  const protocol = req.headers["x-forwarded-proto"] || (req.socket.encrypted ? "https" : "http");
+  return `${protocol}://${req.headers.host || "localhost"}`;
+}
+
+function proxyEndpoint(req) {
+  return new URL(endpoint, proxyOrigin(req)).href;
+}
+
 function proxiedRedirect(location, base, req) {
   const absolute = new URL(location, base);
-  const protocol = req.headers["x-forwarded-proto"] || (req.socket.encrypted ? "https" : "http");
-  const origin = `${protocol}://${req.headers.host || "localhost"}`;
-  return new URL(`${endpoint}${encodeURIComponent(absolute.href)}`, origin).href;
+  return new URL(`${endpoint}${encodeURIComponent(absolute.href)}`, proxyOrigin(req)).href;
 }
 
 async function proxyRequest(req, res, target, redirects = 0) {
@@ -126,12 +133,13 @@ async function proxyRequest(req, res, target, redirects = 0) {
     if (body === null) return sendError(res, 413, `Response exceeds rewrite limit (${Math.floor(maxRewriteSize / 1024 / 1024)} MiB)`);
     const type = String(upstream.headers["content-type"] || "").toLowerCase();
     const source = body.toString("utf8");
+    const absoluteEndpoint = proxyEndpoint(req);
     const iconHref = type.includes("text/html")
       ? `/favicon?url=${encodeURIComponent(target.href)}`
       : "";
     const rewritten = type.includes("text/css")
-      ? rewriteCss(source, target.href, endpoint)
-      : rewriteHtml(source, target.href, endpoint, runtimeScript(endpoint, "/service-worker.js", target.href), iconHref);
+      ? rewriteCss(source, target.href, absoluteEndpoint)
+      : rewriteHtml(source, target.href, absoluteEndpoint, runtimeScript(absoluteEndpoint, "/service-worker.js", target.href), iconHref);
     const output = Buffer.from(rewritten, "utf8");
     delete headersOut["content-length"];
     delete headersOut["content-encoding"];
