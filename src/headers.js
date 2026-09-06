@@ -9,7 +9,6 @@ const hopByHop = new Set([
   "upgrade"
 ]);
 
-const restricted = new Set(["content-length", "content-encoding"]);
 const browserRouting = new Set(["origin", "referer", "sec-fetch-site"]);
 
 export function requestHeaders(headers, target) {
@@ -49,7 +48,6 @@ export function responseHeaders(headers, { rewritten = false } = {}) {
   for (const [name, value] of Object.entries(headers)) {
     const lower = name.toLowerCase();
     if (value == null || hopByHop.has(lower)) continue;
-    if (restricted.has(lower)) continue;
     if (rewritten && (lower === "content-security-policy" || lower === "content-security-policy-report-only")) continue;
     if (lower === "set-cookie") {
       result[name] = normalizeCookies(value);
@@ -59,7 +57,7 @@ export function responseHeaders(headers, { rewritten = false } = {}) {
   }
 
   result["x-robots-tag"] = "noindex, nofollow, noarchive";
-  result["cross-origin-resource-policy"] = "same-origin";
+  result["cross-origin-resource-policy"] = "cross-origin";
 
   if (rewritten) {
     result["cross-origin-opener-policy"] = "same-origin";
