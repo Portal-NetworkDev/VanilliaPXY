@@ -10,16 +10,38 @@ const hopByHop = new Set([
 ]);
 
 const restricted = new Set(["content-length", "content-encoding"]);
+const browserRouting = new Set(["origin", "referer", "sec-fetch-site"]);
 
 export function requestHeaders(headers, target) {
   const result = {};
   for (const [name, value] of Object.entries(headers)) {
     const lower = name.toLowerCase();
-    if (value == null || hopByHop.has(lower) || lower === "host") continue;
+    if (value == null || hopByHop.has(lower) || lower === "host" || browserRouting.has(lower)) continue;
     result[name] = value;
   }
+
+  const referer = originalReferer(headers.referer);
+  if (referer) result.referer = referer;
+
+  if (headers.origin) result.origin = target.origin;
+
   result.host = target.host;
   return result;
+}
+
+function originalReferer(value) {
+  if (!value) return null;
+  try {
+    const referer = new URL(String(value));
+    const encoded = referer.searchParams.get("url");
+    if (encoded) {
+      const original = new URL(encoded);
+      return original.href;
+    }
+    return value;
+  } catch {
+    return value;
+  }
 }
 
 export function responseHeaders(headers, { rewritten = false } = {}) {
