@@ -1,6 +1,8 @@
 import { rewriteSrcset, rewriteUrl } from "./url.js";
 
 const attributePattern = /(\b(?:href|src|action|poster|cite|formaction|manifest|ping|background)\s*=\s*)(["'])(.*?)(\2)/gi;
+const srcsetPattern = /(\bsrcset\s*=\s*)(["'])(.*?)(\2)/gi;
+const protectedBlockPattern = /<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
 const cssUrlPattern = /url\(\s*(["']?)(.*?)\1\s*\)/gi;
 const cssImportPattern = /(@import\s+(?:url\(\s*)?)(["'])([^"']+)(\2)(\s*\)?)/gi;
 
@@ -32,12 +34,29 @@ export function rewriteCss(text, base, endpoint = "/vanillia?url=") {
 }
 
 export function rewriteHtml(text, base, endpoint = "/vanillia?url=", runtime = "", iconHref = "") {
-  let output = text.replace(attributePattern, (match, prefix, quote, value, closing) => {
+  const protectedBlocks = [];
+  let output = String(text ?? "").replace(protectedBlockPattern, match => {
+    const index = protectedBlocks.push(match) - 1;
+    return `__VANILLIAPXY_PROTECTED_${index}__`;
+  });
+
+  output = output.replace(attributePattern, (match, prefix, quote, value, closing) => {
     return `${prefix}${quote}${rewriteUrl(value, base, endpoint)}${closing}`;
   });
 
-  output = output.replace(/(\bsrcset\s*=\s*)(["'])(.*?)(\2)/gi, (match, prefix, quote, value, closing) => {
+  output = output.replace(srcsetPattern, (match, prefix, quote, value, closing) => {
     return `${prefix}${quote}${rewriteSrcset(value, base, endpoint)}${closing}`;
+  });
+
+  output = output.replace(/__VANILLIAPXY_PROTECTED_(\d+)__/g, (match, index) => {
+    const block = protectedBlocks[Number(index)];
+    if (!block) return match;
+    if (/^<style\b/i.test(block)) {
+      return block.replace(/^(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)$/i, (full, open, css, close) => {
+        return `${open}${rewriteCss(css, base, endpoint)}${close}`;
+      });
+    }
+    return block;
   });
 
   if (iconHref) {
