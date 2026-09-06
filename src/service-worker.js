@@ -7,22 +7,32 @@ self.addEventListener("activate", event => event.waitUntil(self.clients.claim())
 
 self.addEventListener("fetch", event => {
   const request = event.request;
+  if (!target || !/^(?:GET|HEAD)$/i.test(request.method)) return;
+
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin || !target) return;
+  const internalPaths = new Set([
+    "/service-worker.js",
+    "/favicon",
+    "/api/icon",
+    "/health",
+    "/robots.txt",
+    "/vanillia"
+  ]);
+
+  if (url.origin === self.location.origin && internalPaths.has(url.pathname)) return;
+
   let upstream;
   try {
     const base = new URL(target);
-    upstream = new URL(url.pathname + url.search + url.hash, base).href;
+    upstream = url.origin === self.location.origin
+      ? new URL(url.pathname + url.search + url.hash, base).href
+      : url.href;
   } catch {
     return;
   }
-  event.respondWith(fetch(endpoint + encodeURIComponent(upstream), {
-    method: request.method,
-    headers: request.headers,
-    body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
-    redirect: "follow",
-    credentials: "include"
-  }));
+
+  const proxied = endpoint + encodeURIComponent(upstream);
+  event.respondWith(fetch(new Request(proxied, request)));
 });
 `;
 
