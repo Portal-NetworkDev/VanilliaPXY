@@ -2,6 +2,7 @@ import { rewriteSrcset, rewriteUrl } from "./url.js";
 
 const attributePattern = /(\b(?:href|src|action|poster|cite|formaction|manifest|ping|background)\s*=\s*)(["'])(.*?)(\2)/gi;
 const srcsetPattern = /(\bsrcset\s*=\s*)(["'])(.*?)(\2)/gi;
+const stylesheetLinkPattern = /<link\b[^>]*>/gi;
 const protectedBlockPattern = /<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
 const cssUrlPattern = /url\(\s*(["']?)(.*?)\1\s*\)/gi;
 const cssImportPattern = /(@import\s+(?:url\(\s*)?)(["'])([^"']+)(\2)(\s*\)?)/gi;
@@ -21,6 +22,19 @@ function cssPass(text, base, endpoint) {
     return `${prefix}${quote}${rewriteCssValue(value, base, endpoint)}${quote}${closing}`;
   });
   return output;
+}
+
+function rewriteStylesheetLinks(text, base, endpoint) {
+  return text.replace(stylesheetLinkPattern, tag => {
+    const relMatch = tag.match(/\brel\s*=\s*(["'])(.*?)\1/i);
+    if (!relMatch || !/\bstylesheet\b/i.test(relMatch[2])) return tag;
+
+    return tag.replace(/(\bhref\s*=\s*)(["'])(.*?)(\2)/i, (match, prefix, quote, value, closing) => {
+      return `${prefix}${quote}${rewriteUrl(value, base, endpoint)}${closing}`;
+    }).replace(/(\bhref\s*=\s*)(?!["'])([^\s>]+)/i, (match, prefix, value) => {
+      return `${prefix}${rewriteUrl(value, base, endpoint)}`;
+    });
+  });
 }
 
 export function proxyUrl(value, base, endpoint = "/vanillia?url=") {
@@ -48,6 +62,8 @@ export function rewriteHtml(text, base, endpoint = "/vanillia?url=", runtime = "
     return `${prefix}${quote}${rewriteSrcset(value, base, endpoint)}${closing}`;
   });
 
+  output = rewriteStylesheetLinks(output, base, endpoint);
+
   output = output.replace(/__VANILLIAPXY_PROTECTED_(\d+)__/g, (match, index) => {
     const block = protectedBlocks[Number(index)];
     if (!block) return match;
@@ -67,14 +83,16 @@ export function rewriteHtml(text, base, endpoint = "/vanillia?url=", runtime = "
     output = `<base href="${escapeAttribute(base)}">${output}`;
   }
 
-  if (iconHref) {
-    const iconTag = `<link rel="icon" data-vanillia-icon="true" href="${iconHref}">`;
-    if (/<\/head\s*>/i.test(output)) output = output.replace(/<\/head\s*>/i, `${iconTag}</head>`);
-    else output = `${iconTag}${output}`;
+  const headInjection = `${iconHref ? `<link rel="icon" data-vanillia-icon="true" href="${iconHref}">` : ""}${runtime}`;
+  if (headInjection && /<head\b[^>]*>/i.test(output)) {
+    output = output.replace(/<head\b[^>]*>/i, match => `${match}${headInjection}`);
+  } else if (iconHref) {
+    output = `${iconHref ? `<link rel="icon" data-vanillia-icon="true" href="${iconHref}">` : ""}${output}`;
+    if (runtime) output = `${runtime}${output}`;
+  } else if (runtime) {
+    output = `${runtime}${output}`;
   }
 
-  if (runtime && /<\/head\s*>/i.test(output)) output = output.replace(/<\/head\s*>/i, `${runtime}</head>`);
-  else if (runtime) output = `${runtime}${output}`;
   return output;
 }
 
