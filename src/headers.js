@@ -37,6 +37,13 @@ export function responseHeaders(headers, { rewritten = false } = {}) {
   }
 
   result["x-robots-tag"] = "noindex, nofollow, noarchive";
+  result["cross-origin-resource-policy"] = "same-origin";
+
+  if (rewritten) {
+    result["cross-origin-opener-policy"] = "same-origin";
+    result["cross-origin-embedder-policy"] = "require-corp";
+  }
+
   return result;
 }
 
