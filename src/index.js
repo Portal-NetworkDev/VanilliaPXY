@@ -63,6 +63,14 @@ function bodyBuffer(stream, limit) {
   });
 }
 
+async function streamBuffer(res, buffer) {
+  const chunkSize = 64 * 1024;
+  for (let offset = 0; offset < buffer.length; offset += chunkSize) {
+    const chunk = buffer.subarray(offset, Math.min(offset + chunkSize, buffer.length));
+    if (!res.write(chunk)) await new Promise(resolve => res.once("drain", resolve));
+  }
+}
+
 function proxiedRedirect(location, base, req) {
   const absolute = new URL(location, base);
   const protocol = req.headers["x-forwarded-proto"] || (req.socket.encrypted ? "https" : "http");
@@ -127,9 +135,9 @@ async function proxyRequest(req, res, target, redirects = 0) {
     const output = Buffer.from(rewritten, "utf8");
     delete headersOut["content-length"];
     delete headersOut["content-encoding"];
-    headersOut["content-length"] = String(output.length);
     res.writeHead(upstream.statusCode, headersOut);
-    res.end(output);
+    await streamBuffer(res, output);
+    res.end();
   } catch (error) {
     sendError(res, error.name === "AbortError" ? 504 : 502, error.name === "AbortError" ? "Upstream request timed out" : "Unable to reach upstream");
   } finally {
@@ -175,7 +183,7 @@ async function handleRequest(req, res) {
       "x-robots-tag": "noindex, nofollow, noarchive",
       "access-control-allow-origin": "*"
     });
-    res.end(JSON.stringify({ status: "ok", version: "0.9.6" }));
+    res.end(JSON.stringify({ status: "ok", version: "0.9.7" }));
     return;
   }
   if (url.pathname === "/robots.txt") {
@@ -255,4 +263,5 @@ server.on("upgrade", (req, socket, head) => {
 server.headersTimeout = timeout + 5000;
 server.requestTimeout = 0;
 server.keepAliveTimeout = 65000;
-server.listen(port, () => console.log(`VanilliaPXY listening on ${port}`));
+
+export { server, handleRequest };
