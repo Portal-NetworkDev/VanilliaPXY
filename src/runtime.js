@@ -9,6 +9,10 @@ const runtimeSource = String.raw`(() => {
   const nativeWindowPostMessage = globalThis.postMessage?.bind(globalThis);
   const nativeWindowPrototypePostMessage = globalThis.Window?.prototype?.postMessage;
   const nativeSetAttribute = globalThis.Element?.prototype?.setAttribute;
+  const nativeCssSetProperty = globalThis.CSSStyleDeclaration?.prototype?.setProperty;
+  const nativeCssText = globalThis.CSSStyleDeclaration
+    ? Object.getOwnPropertyDescriptor(globalThis.CSSStyleDeclaration.prototype, "cssText")
+    : null;
   const base = globalThis.__VANILLIAPXY_TARGET__ || document.baseURI;
   const endpoint = globalThis.__VANILLIAPXY_ENDPOINT__ || "/vanillia?url=";
   const workerEndpoint = globalThis.__VANILLIAPXY_SW__ || "/service-worker.js";
@@ -31,6 +35,9 @@ const runtimeSource = String.raw`(() => {
       return `${proxy(match[1])}${match[2] || ""}`;
     }).join(", ");
   };
+  const proxyCss = value => String(value ?? "").replace(/url(\s*\(\s*)(["']?)(.*?)(\2)(\s*\))/gi,
+    (match, prefix, quote, url, closingQuote, suffix) => `${prefix}${quote}${proxy(url)}${closingQuote}${suffix}`
+  );
   const isProxyUrl = value => {
     try {
       const resolved = new URL(value, location.href);
@@ -80,9 +87,29 @@ const runtimeSource = String.raw`(() => {
         const lower = String(name).toLowerCase();
         if (lower === "srcset") value = proxySrcset(String(value));
         else if (["src", "href", "poster", "data"].includes(lower)) value = proxy(String(value));
+        else if (lower === "style") value = proxyCss(String(value));
         return nativeSetAttribute.call(this, name, value);
       };
     } catch {}
+  }
+  if (globalThis.CSSStyleDeclaration?.prototype) {
+    if (nativeCssSetProperty) {
+      try {
+        globalThis.CSSStyleDeclaration.prototype.setProperty = function(name, value, priority) {
+          return nativeCssSetProperty.call(this, name, proxyCss(String(value)), priority);
+        };
+      } catch {}
+    }
+    if (nativeCssText?.get && nativeCssText?.set) {
+      try {
+        Object.defineProperty(globalThis.CSSStyleDeclaration.prototype, "cssText", {
+          configurable: nativeCssText.configurable,
+          enumerable: nativeCssText.enumerable,
+          get: nativeCssText.get,
+          set(value) { return nativeCssText.set.call(this, proxyCss(String(value))); }
+        });
+      } catch {}
+    }
   }
   installUrlProperty(globalThis.HTMLImageElement?.prototype, "src");
   installSrcsetProperty(globalThis.HTMLImageElement?.prototype);
