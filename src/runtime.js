@@ -30,13 +30,13 @@ const runtimeSource = String.raw`(() => {
   const proxySrcset = value => {
     if (typeof value !== "string") return value;
     return value.split(",").map(candidate => {
-      const match = candidate.trim().match(/^(\S+)(\s+.+)?$/);
+      const match = candidate.trim().match(/^(\\S+)(\\s+.+)?$/);
       if (!match) return candidate;
-      return `${proxy(match[1])}${match[2] || ""}`;
+      return proxy(match[1]) + (match[2] || "");
     }).join(", ");
   };
-  const proxyCss = value => String(value ?? "").replace(/url(\s*\(\s*)(["']?)(.*?)(\2)(\s*\))/gi,
-    (match, prefix, quote, url, closingQuote, suffix) => `${prefix}${quote}${proxy(url)}${closingQuote}${suffix}`
+  const proxyCss = value => String(value ?? "").replace(/url(\\s*\\(\\s*)(["']?)(.*?)(\\2)(\\s*\\))/gi,
+    (match, prefix, quote, url, closingQuote, suffix) => prefix + quote + proxy(url) + closingQuote + suffix
   );
   const isProxyUrl = value => {
     try {
