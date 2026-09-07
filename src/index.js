@@ -8,6 +8,7 @@ import { rewriteCss, rewriteHtml } from "./rewriter.js";
 import { runtimeScript } from "./runtime.js";
 import { serviceWorkerResponse } from "./service-worker.js";
 import { fetchSiteIcon } from "./icon.js";
+import { adblockerScript } from "./adblocker.js";
 
 const port = Number(process.env.PORT) || 8080;
 const timeout = Number(process.env.UPSTREAM_TIMEOUT) || 30000;
@@ -139,7 +140,17 @@ async function proxyRequest(req, res, target, redirects = 0) {
       : "";
     const rewritten = type.includes("text/css")
       ? rewriteCss(source, target.href, absoluteEndpoint)
-      : rewriteHtml(source, target.href, absoluteEndpoint, runtimeScript(absoluteEndpoint, "/service-worker.js", target.href), iconHref);
+      :rewriteHtml(
+  source,
+  target.href,
+  absoluteEndpoint,
+  runtimeScript(
+    absoluteEndpoint,
+    "/service-worker.js",
+    target.href
+  ) + adblockerScript(),
+  iconHref
+);
     const output = Buffer.from(rewritten, "utf8");
     delete headersOut["content-length"];
     delete headersOut["content-encoding"];
