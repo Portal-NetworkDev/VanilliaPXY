@@ -9,4 +9,4 @@ You have to inject a url string after the url. It should look something like '/v
 
 ## want to contribute? 
 
-(Join our discord server) [https://discord.gg/bU4SJ2n7yj]
+[Join our discord server] (https://discord.gg/bU4SJ2n7yj)
