@@ -1,4 +1,4 @@
-// Built in adblocker. Helped & built by emma.
+// Built in adblocker. Helped & built by emma and Blake. 
 
 const adblockerSource = String.raw`(() => {
   const marker = Symbol.for("VanilliaPXY.adblocker");
