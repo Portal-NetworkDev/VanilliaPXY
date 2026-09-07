@@ -202,7 +202,7 @@ async function handleRequest(req, res) {
       "x-robots-tag": "noindex, nofollow, noarchive",
       "access-control-allow-origin": "*"
     });
-    res.end(JSON.stringify({ status: "ok", version: "0.9.8" }));
+    res.end(JSON.stringify({ status: "ok", version: "0.3.8" }));
     return;
   }
   if (url.pathname === "/robots.txt") {
