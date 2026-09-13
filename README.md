@@ -21,3 +21,5 @@ For example:
 ## Want to contribute?
 
 [Join our Discord server](https://discord.gg/bU4SJ2n7yj)
+
+Note: Adding roblox support soon. check the discord for more details/
