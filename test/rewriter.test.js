@@ -26,7 +26,7 @@ test("rewriteHtml rewrites resource attributes", () => {
 
 test("rewriteHtml injects runtime before head close", () => {
   const result = rewriteHtml("<html><head></head><body></body></html>", base, endpoint, "<script>runtime()</script>");
-  assert.equal(result, "<html><head><script>runtime()</script></head><body></body></html>");
+  assert.equal(result, "<html><head><script>runtime()</script><base href=\"https://example.com/app/index.html\"></head><body></body></html>");
 });
 
 test("rewriteCss rewrites relative urls", () => {
