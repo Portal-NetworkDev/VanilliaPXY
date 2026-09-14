@@ -42,9 +42,7 @@ export function proxyUrl(value, base, endpoint = "/vanillia?url=") {
 }
 
 export function rewriteCss(text, base, endpoint = "/vanillia?url=") {
-  let output = cssPass(String(text ?? ""), base, endpoint);
-  output = cssPass(output, base, endpoint);
-  return output;
+  return cssPass(String(text ?? ""), base, endpoint);
 }
 
 export function rewriteHtml(text, base, endpoint = "/vanillia?url=", runtime = "", iconHref = "") {
