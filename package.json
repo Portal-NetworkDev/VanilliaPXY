@@ -3,7 +3,29 @@
   "version": "0.3.8",
   "description": "Streaming transport backend for browser-side web proxy engines.",
   "type": "module",
-  "engines": { "node": "24.x" },
-  "scripts": { "start": "node server.js", "test": "node --test" },
-  "dependencies": { "@mercuryworkshop/wisp-js": "^0.4.1", "undici": "^7.16.0", "ws": "^8.18.3" }
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "server.js",
+    "README.md",
+    "HELP.md"
+  ],
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@mercuryworkshop/wisp-js": "^0.4.1",
+    "undici": "^7.16.0",
+    "ws": "^8.18.3"
+  }
 }
