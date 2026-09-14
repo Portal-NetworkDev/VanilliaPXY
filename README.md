@@ -1,25 +1,53 @@
 <img width="800" height="450" alt="VanilliaPXY" src="https://github.com/user-attachments/assets/d54fa217-8137-48c6-8623-912e59e29c12" />
 
-## VanilliaPXY - Dev Server
+## VanilliaPXY
 
-The dev server is currently backend-only and in beta:
+VanilliaPXY is a streaming transport backend for browser-side web proxy engines.
 
-https://8080.testserver.vanilliaruntime.portal-network.com/
+## Install
 
-## How do I get the backend to work?
+```bash
+npm install vanilliapxy
+```
 
-You have to inject a URL string after the backend URL.
+The package uses Node.js 24.x and includes the server runtime and its dependencies.
 
-It should look something like:
+## Use as a server
+
+```js
+import { server } from "vanilliapxy";
+
+server.listen(8080);
+```
+
+Or run the included server directly:
+
+```bash
+npm start
+```
+
+## Proxy endpoint
+
+The default endpoint is:
 
 `/vanillia?url=https://example.com/`
 
-For example:
+The development backend is currently available at:
 
-`https://8080.testserver.vanilliaruntime.portal-network.com/vanillia?url=https://example.com/`
+https://8080.testserver.vanilliaruntime.portal-network.com/
 
-## Want to contribute?
+Example:
+
+https://8080.testserver.vanilliaruntime.portal-network.com/vanillia?url=https://example.com/
+
+## Configuration
+
+The endpoint can be changed with `PROXY_ENDPOINT`.
+
+The server also supports the existing environment variables documented in `HELP.md`.
+
+## Contributing
 
 [Join our Discord server](https://discord.gg/bU4SJ2n7yj)
 
-Note: Adding roblox support soon. check the discord for more details/
+Note: Roblox support is planned.
