@@ -50,4 +50,4 @@ The server also supports the existing environment variables documented in `HELP.
 
 [Join our Discord server](https://discord.gg/bU4SJ2n7yj)
 
-Note: Roblox support is planned.
+VanilliaPXY is completely open source. Just dont claim it yours when its not.
