@@ -50,4 +50,4 @@ The server also supports the existing environment variables documented in `HELP.
 
 [Join our Discord server](https://discord.gg/bU4SJ2n7yj)
 
-VanilliaPXY is completely open source. Use it for your own proxys or whatever.Just dont claim it yours when its not.
+VanilliaPXY is completely open source. Use it for your own proxys or whatever. Just dont claim it yours when its not.
