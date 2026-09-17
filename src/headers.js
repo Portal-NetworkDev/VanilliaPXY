@@ -30,15 +30,41 @@ export function requestHeaders(headers, target) {
 
   const referer = originalReferer(headers.referer);
   if (referer) result.referer = referer;
-  if (headers.origin) result.origin = target.origin;
-  result.host = target.host;
+
+  const origin = originalOrigin(headers.origin, referer, target);
+  if (origin) result.origin = origin;
 
   if (headers["sec-fetch-dest"]) result["sec-fetch-dest"] = headers["sec-fetch-dest"];
   if (headers["sec-fetch-mode"]) result["sec-fetch-mode"] = headers["sec-fetch-mode"];
   if (headers["sec-fetch-user"]) result["sec-fetch-user"] = headers["sec-fetch-user"];
-  result["sec-fetch-site"] = "same-origin";
+  if (origin) result["sec-fetch-site"] = fetchSite(origin, target.origin);
 
   return result;
+}
+
+function originalOrigin(value, referer, target) {
+  try {
+    if (referer) return new URL(referer).origin;
+    if (value && /^https?:\/\//i.test(value)) return new URL(value).origin;
+  } catch {}
+  return target.origin;
+}
+
+function fetchSite(origin, targetOrigin) {
+  try {
+    const source = new URL(origin);
+    const target = new URL(targetOrigin);
+    if (source.origin === target.origin) return "same-origin";
+    if (sameSite(source.hostname, target.hostname)) return "same-site";
+  } catch {}
+  return "cross-site";
+}
+
+function sameSite(left, right) {
+  const a = left.toLowerCase().split(".").filter(Boolean);
+  const b = right.toLowerCase().split(".").filter(Boolean);
+  if (a.length < 2 || b.length < 2) return left === right;
+  return a.slice(-2).join(".") === b.slice(-2).join(".");
 }
 
 function originalReferer(value) {
@@ -53,7 +79,7 @@ function originalReferer(value) {
   }
 }
 
-export function responseHeaders(headers, { rewritten = false, origin = null } = {}) {
+export function responseHeaders(headers, { rewritten = false } = {}) {
   const result = {};
   for (const [name, value] of Object.entries(headers)) {
     const lower = name.toLowerCase();
@@ -67,12 +93,6 @@ export function responseHeaders(headers, { rewritten = false, origin = null } = 
     result[name] = value;
   }
 
-  if (origin) {
-    result["access-control-allow-origin"] = origin;
-    result["access-control-allow-credentials"] = "true";
-    result["vary"] = mergeVary(result["vary"], "Origin");
-  }
-
   result["x-robots-tag"] = "noindex, nofollow, noarchive";
   result["cross-origin-resource-policy"] = "cross-origin";
   delete result["cross-origin-opener-policy"];
@@ -81,13 +101,12 @@ export function responseHeaders(headers, { rewritten = false, origin = null } = 
   return result;
 }
 
-function mergeVary(value, next) {
-  const values = String(value || "").split(",").map(v => v.trim()).filter(Boolean);
-  if (!values.some(v => v.toLowerCase() === next.toLowerCase())) values.push(next);
-  return values.join(", ");
-}
-
 function normalizeCookies(value) {
   const cookies = Array.isArray(value) ? value : [value];
-  return cookies.map(cookie => cookie.replace(/;\s*Domain=[^;]*/gi, ""));
+  return cookies.map(cookie => {
+    let normalized = String(cookie).replace(/;\s*Domain=[^;]*/gi, "");
+    if (/;\s*Path=/i.test(normalized)) normalized = normalized.replace(/;\s*Path=[^;]*/gi, "; Path=/");
+    else normalized += "; Path=/";
+    return normalized;
+  });
 }
