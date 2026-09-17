@@ -9,13 +9,22 @@ const hopByHop = new Set([
   "upgrade"
 ]);
 
-const browserRouting = new Set(["origin", "referer", "sec-fetch-site"]);
+const browserOnly = new Set([
+  "host",
+  "content-length",
+  "origin",
+  "referer",
+  "sec-fetch-dest",
+  "sec-fetch-mode",
+  "sec-fetch-site",
+  "sec-fetch-user"
+]);
 
 export function requestHeaders(headers, target) {
   const result = {};
   for (const [name, value] of Object.entries(headers)) {
     const lower = name.toLowerCase();
-    if (value == null || hopByHop.has(lower) || lower === "host" || browserRouting.has(lower)) continue;
+    if (value == null || hopByHop.has(lower) || browserOnly.has(lower)) continue;
     result[name] = value;
   }
 
@@ -23,8 +32,13 @@ export function requestHeaders(headers, target) {
   if (referer) result.referer = referer;
 
   if (headers.origin) result.origin = target.origin;
-
   result.host = target.host;
+
+  if (headers["sec-fetch-dest"]) result["sec-fetch-dest"] = headers["sec-fetch-dest"];
+  if (headers["sec-fetch-mode"]) result["sec-fetch-mode"] = headers["sec-fetch-mode"];
+  if (headers["sec-fetch-user"]) result["sec-fetch-user"] = headers["sec-fetch-user"];
+  result["sec-fetch-site"] = "same-origin";
+
   return result;
 }
 
@@ -33,10 +47,7 @@ function originalReferer(value) {
   try {
     const referer = new URL(String(value));
     const encoded = referer.searchParams.get("url");
-    if (encoded) {
-      const original = new URL(encoded);
-      return original.href;
-    }
+    if (encoded) return new URL(encoded).href;
     return value;
   } catch {
     return value;
@@ -58,13 +69,6 @@ export function responseHeaders(headers, { rewritten = false } = {}) {
 
   result["x-robots-tag"] = "noindex, nofollow, noarchive";
   result["cross-origin-resource-policy"] = "cross-origin";
-
-  // Do not impose COEP on ordinary proxied websites. COEP=require-corp
-  // makes the browser reject third-party resources that the page creates
-  // before our runtime can rewrite them. That is exactly what breaks pages
-  // such as Minecraft with ERR_BLOCKED_BY_RESPONSE.NotSameOriginAfterDefaultedToSameOriginByCoep.
-  // Cross-origin isolation should be enabled by a dedicated deployment/path
-  // when a site such as Eaglercraft actually requires SharedArrayBuffer.
   delete result["cross-origin-opener-policy"];
   delete result["cross-origin-embedder-policy"];
 
