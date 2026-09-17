@@ -30,7 +30,6 @@ export function requestHeaders(headers, target) {
 
   const referer = originalReferer(headers.referer);
   if (referer) result.referer = referer;
-
   if (headers.origin) result.origin = target.origin;
   result.host = target.host;
 
@@ -54,7 +53,7 @@ function originalReferer(value) {
   }
 }
 
-export function responseHeaders(headers, { rewritten = false } = {}) {
+export function responseHeaders(headers, { rewritten = false, origin = null } = {}) {
   const result = {};
   for (const [name, value] of Object.entries(headers)) {
     const lower = name.toLowerCase();
@@ -64,7 +63,14 @@ export function responseHeaders(headers, { rewritten = false } = {}) {
       result[name] = normalizeCookies(value);
       continue;
     }
+    if (lower === "access-control-allow-origin" || lower === "access-control-allow-credentials") continue;
     result[name] = value;
+  }
+
+  if (origin) {
+    result["access-control-allow-origin"] = origin;
+    result["access-control-allow-credentials"] = "true";
+    result["vary"] = mergeVary(result["vary"], "Origin");
   }
 
   result["x-robots-tag"] = "noindex, nofollow, noarchive";
@@ -73,6 +79,12 @@ export function responseHeaders(headers, { rewritten = false } = {}) {
   delete result["cross-origin-embedder-policy"];
 
   return result;
+}
+
+function mergeVary(value, next) {
+  const values = String(value || "").split(",").map(v => v.trim()).filter(Boolean);
+  if (!values.some(v => v.toLowerCase() === next.toLowerCase())) values.push(next);
+  return values.join(", ");
 }
 
 function normalizeCookies(value) {
