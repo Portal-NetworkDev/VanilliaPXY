@@ -31,13 +31,15 @@ export function requestHeaders(headers, target) {
   const referer = originalReferer(headers.referer);
   if (referer) result.referer = referer;
 
-  const origin = originalOrigin(headers.origin, referer, target);
+  const origin = headers.origin ? originalOrigin(headers.origin, referer, target) : null;
   if (origin) result.origin = origin;
 
   if (headers["sec-fetch-dest"]) result["sec-fetch-dest"] = headers["sec-fetch-dest"];
   if (headers["sec-fetch-mode"]) result["sec-fetch-mode"] = headers["sec-fetch-mode"];
   if (headers["sec-fetch-user"]) result["sec-fetch-user"] = headers["sec-fetch-user"];
-  if (origin) result["sec-fetch-site"] = fetchSite(origin, target.origin);
+
+  const pageOrigin = referer ? safeOrigin(referer) : origin;
+  if (pageOrigin) result["sec-fetch-site"] = fetchSite(pageOrigin, target.origin);
 
   return result;
 }
@@ -48,6 +50,14 @@ function originalOrigin(value, referer, target) {
     if (value && /^https?:\/\//i.test(value)) return new URL(value).origin;
   } catch {}
   return target.origin;
+}
+
+function safeOrigin(value) {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
 }
 
 function fetchSite(origin, targetOrigin) {
