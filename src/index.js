@@ -238,7 +238,8 @@ async function handleRequest(req, res) {
     return;
   }
   if (url.pathname === "/favicon") {
-    const target = await validateTarget(url.searchParams.get("url"), allowPrivate);
+    const rawTarget = url.searchParams.get("url") || (url.searchParams.has("q") ? `https://www.google.com/search?q=${encodeURIComponent(url.searchParams.get("q") || "")}` : null);
+  const target = await validateTarget(rawTarget, allowPrivate);
     if (!target) return sendError(res, 403, "Target is not allowed");
     const icon = await fetchSiteIcon(target.href);
     if (!icon) return sendError(res, 404, "Website icon not found");
