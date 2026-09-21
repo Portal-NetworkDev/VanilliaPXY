@@ -215,6 +215,70 @@ const runtimeSource = String.raw`(() => {
   installUrlProperty(globalThis.HTMLMediaElement?.prototype, "src");
   installUrlProperty(globalThis.HTMLObjectElement?.prototype, "data");
   installUrlProperty(globalThis.HTMLEmbedElement?.prototype, "src");
+  const messageOrigin = (() => {
+    try { return new URL(base).origin; } catch { return location.origin; }
+  })();
+  const messageMarker = "__VANILLIAPXY_MESSAGE__";
+  const wrapMessage = value => ({
+    [messageMarker]: true,
+    origin: messageOrigin,
+    data: value
+  });
+  const unwrapMessageEvent = event => {
+    const value = event?.data;
+    if (!value || typeof value !== "object" || value[messageMarker] !== true) return event;
+    return new Proxy(event, {
+      get(target, property, receiver) {
+        if (property === "data") return value.data;
+        if (property === "origin") return value.origin || messageOrigin;
+        return Reflect.get(target, property, receiver);
+      }
+    });
+  };
+  const nativeEventTargetAddEventListener = globalThis.EventTarget?.prototype?.addEventListener;
+  const nativeEventTargetRemoveEventListener = globalThis.EventTarget?.prototype?.removeEventListener;
+  const messageListeners = new WeakMap();
+  if (nativeEventTargetAddEventListener && nativeEventTargetRemoveEventListener) {
+    try {
+      globalThis.EventTarget.prototype.addEventListener = function(type, listener, options) {
+        if (type !== "message" || typeof listener !== "function") {
+          return nativeEventTargetAddEventListener.call(this, type, listener, options);
+        }
+        let wrapped = messageListeners.get(listener);
+        if (!wrapped) {
+          wrapped = event => listener.call(this, unwrapMessageEvent(event));
+          messageListeners.set(listener, wrapped);
+        }
+        return nativeEventTargetAddEventListener.call(this, type, wrapped, options);
+      };
+      globalThis.EventTarget.prototype.removeEventListener = function(type, listener, options) {
+        if (type !== "message" || typeof listener !== "function") {
+          return nativeEventTargetRemoveEventListener.call(this, type, listener, options);
+        }
+        return nativeEventTargetRemoveEventListener.call(this, type, messageListeners.get(listener) || listener, options);
+      };
+    } catch {}
+  }
+  if (globalThis.Window?.prototype && nativeWindowPrototypePostMessage) {
+    try {
+      globalThis.Window.prototype.postMessage = function(message, targetOrigin, transfer) {
+        const nextMessage = wrapMessage(message);
+        if (arguments.length >= 3) {
+          return nativeWindowPrototypePostMessage.call(this, nextMessage, "*", transfer);
+        }
+        return nativeWindowPrototypePostMessage.call(this, nextMessage, "*");
+      };
+    } catch {}
+  }
+  if (nativeWindowPostMessage) {
+    try {
+      globalThis.postMessage = function(message, targetOrigin, transfer) {
+        const nextMessage = wrapMessage(message);
+        if (arguments.length >= 3) return nativeWindowPostMessage(nextMessage, "*", transfer);
+        return nativeWindowPostMessage(nextMessage, "*");
+      };
+    } catch {}
+  }
   if (globalThis.HTMLFormElement) {
     document.addEventListener("submit", event => {
       const form = event.target;
