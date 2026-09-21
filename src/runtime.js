@@ -259,6 +259,26 @@ const runtimeSource = String.raw`(() => {
       };
     } catch {}
   }
+  const installMessageProperty = prototype => {
+    if (!prototype) return;
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, "onmessage");
+    if (!descriptor?.get || !descriptor?.set || !descriptor.configurable) return;
+    try {
+      Object.defineProperty(prototype, "onmessage", {
+        configurable: descriptor.configurable,
+        enumerable: descriptor.enumerable,
+        get() { return descriptor.get.call(this); },
+        set(listener) {
+          if (typeof listener !== "function") return descriptor.set.call(this, listener);
+          const wrapped = event => listener.call(this, unwrapMessageEvent(event));
+          return descriptor.set.call(this, wrapped);
+        }
+      });
+    } catch {}
+  };
+  installMessageProperty(globalThis.Window?.prototype);
+  installMessageProperty(globalThis.MessagePort?.prototype);
+  installMessageProperty(globalThis.Worker?.prototype);
   if (globalThis.Window?.prototype && nativeWindowPrototypePostMessage) {
     try {
       globalThis.Window.prototype.postMessage = function(message, targetOrigin, transfer) {
