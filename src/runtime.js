@@ -225,8 +225,15 @@ const runtimeSource = String.raw`(() => {
       if (!/^https?:$/i.test(new URL(target, base).protocol)) return;
       const destination = new URL(target, base);
       const data = new FormData(form);
-      for (const [name, value] of data.entries()) {
-        if (typeof value === "string") destination.searchParams.append(name, value);
+      const entries = [...data.entries()].filter(([, value]) => typeof value === "string");
+      const targetHost = destination.hostname.toLowerCase();
+      const isGoogleSearch = /(?:^|\\.)google\\.com$/.test(targetHost) && entries.some(([name, value]) => name === "q" && value);
+      if (isGoogleSearch) {
+        destination.pathname = "/search";
+        destination.search = "";
+      }
+      for (const [name, value] of entries) {
+        destination.searchParams.append(name, value);
       }
       event.preventDefault();
       const next = proxy(destination.href);
