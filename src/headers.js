@@ -41,7 +41,23 @@ export function requestHeaders(headers, target) {
   const pageOrigin = referer ? safeOrigin(referer) : origin;
   if (pageOrigin) result["sec-fetch-site"] = fetchSite(pageOrigin, target.origin);
 
+  if (isDuckDuckGoScript(target)) {
+    result["sec-fetch-dest"] = "script";
+    result["sec-fetch-mode"] = "no-cors";
+    result["sec-fetch-site"] = "same-site";
+    result.referer = "https://duckduckgo.com/";
+  }
+
   return result;
+}
+
+function isDuckDuckGoScript(target) {
+  try {
+    const url = new URL(target);
+    return url.hostname === "links.duckduckgo.com" && url.pathname === "/d.js";
+  } catch {
+    return false;
+  }
 }
 
 function originalOrigin(value, referer, target) {
@@ -114,8 +130,8 @@ export function responseHeaders(headers, { rewritten = false } = {}) {
 function normalizeCookies(value) {
   const cookies = Array.isArray(value) ? value : [value];
   return cookies.map(cookie => {
-    let normalized = String(cookie).replace(/;\s*Domain=[^;]*/gi, "");
-    if (/;\s*Path=/i.test(normalized)) normalized = normalized.replace(/;\s*Path=[^;]*/gi, "; Path=/");
+    let normalized = String(cookie).replace(/;\\s*Domain=[^;]*/gi, "");
+    if (/;\\s*Path=/i.test(normalized)) normalized = normalized.replace(/;\\s*Path=[^;]*/gi, "; Path=/");
     else normalized += "; Path=/";
     return normalized;
   });
