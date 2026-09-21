@@ -98,7 +98,8 @@ export async function handleWorkerRequest(request) {
   if (url.pathname === "/robots.txt") return new Response("User-agent: *\nDisallow: /\n", { headers: { "content-type": "text/plain; charset=utf-8" }});
   if (url.pathname === "/service-worker.js") return serviceWorkerResponse();
   if (url.pathname === "/favicon") {
-    const target = await validateTarget(url.searchParams.get("url"));
+    const rawTarget = url.searchParams.get("url") || (url.searchParams.has("q") ? `https://www.google.com/search?q=${encodeURIComponent(url.searchParams.get("q") || "")}` : null);
+  const target = await validateTarget(rawTarget);
     if (!target) return errorResponse(403, "Target is not allowed");
     try {
       const response = await fetch(new URL("/favicon.ico", target.origin), { redirect: "follow", signal: AbortSignal.timeout(timeout) });
