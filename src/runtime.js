@@ -246,7 +246,7 @@ const runtimeSource = String.raw`(() => {
         }
         let wrapped = messageListeners.get(listener);
         if (!wrapped) {
-          wrapped = event => listener.call(this, unwrapMessageEvent(event));
+          wrapped = event => listener.call(event.currentTarget, unwrapMessageEvent(event));
           messageListeners.set(listener, wrapped);
         }
         return nativeEventTargetAddEventListener.call(this, type, wrapped, options);
