@@ -111,7 +111,8 @@ export function responseHeaders(headers, { rewritten = false } = {}) {
     const lower = name.toLowerCase();
     if (value == null || hopByHop.has(lower)) continue;
     if (rewritten && (lower === "content-security-policy" || lower === "content-security-policy-report-only")) continue;
-    if (rewritten && (lower === "x-frame-options" || lower === "permissions-policy")) continue;
+    if (lower === "x-frame-options") continue;
+    if (rewritten && lower === "permissions-policy") continue;
     if (lower === "set-cookie") {
       result[name] = normalizeCookies(value);
       continue;
