@@ -1,16 +1,42 @@
 import { rewriteSrcset, rewriteUrl } from "./url.js";
 
-const attributePattern = /(\b(?:href|src|action|poster|cite|formaction|manifest|ping|background)\s*=\s*)(["'])(.*?)(\2)/gi;
+const urlAttributes = new Set([
+  "href", "src", "action", "poster", "cite", "formaction", "manifest",
+  "ping", "background", "data", "xlink:href"
+]);
+const attributePattern = /([\s<](?:[A-Za-z_:][\w:.-]*:)?[A-Za-z_:][\w:.-]*\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
 const srcsetPattern = /(\bsrcset\s*=\s*)(["'])(.*?)(\2)/gi;
 const stylesheetLinkPattern = /<link\b[^>]*>/gi;
 const protectedBlockPattern = /<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
 const cssUrlPattern = /url\(\s*(["']?)(.*?)\1\s*\)/gi;
 const cssImportPattern = /(@import\s+(?:url\(\s*)?)(["'])([^"']+)(\2)(\s*\)?)/gi;
+const metaRefreshPattern = /(<meta\b[^>]*\bhttp-equiv\s*=\s*(["'])refresh\2[^>]*\bcontent\s*=\s*)(["'])(.*?)\3([^>]*>)/gi;
+
+function decodeHtmlAttribute(value) {
+  return String(value ?? "")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&#x2f;/gi, "/")
+    .replace(/&#(\d+);/g, (_, code) => {
+      const n = Number(code);
+      return Number.isFinite(n) ? String.fromCodePoint(n) : _;
+    })
+    .replace(/&#x([\da-f]+);/gi, (_, code) => {
+      const n = parseInt(code, 16);
+      return Number.isFinite(n) ? String.fromCodePoint(n) : _;
+    });
+}
+
+function rewriteUrlValue(value, base, endpoint) {
+  return rewriteUrl(decodeHtmlAttribute(value), base, endpoint);
+}
 
 function rewriteCssValue(value, base, endpoint) {
   const input = String(value ?? "").trim();
   if (!input || /^(?:data:|blob:|about:|#)/i.test(input)) return value;
-  return rewriteUrl(input, base, endpoint);
+  return rewriteUrlValue(input, base, endpoint);
 }
 
 function cssPass(text, base, endpoint) {
@@ -30,15 +56,24 @@ function rewriteStylesheetLinks(text, base, endpoint) {
     if (!relMatch || !/\bstylesheet\b/i.test(relMatch[2])) return tag;
 
     return tag.replace(/(\bhref\s*=\s*)(["'])(.*?)(\2)/i, (match, prefix, quote, value, closing) => {
-      return `${prefix}${quote}${rewriteUrl(value, base, endpoint)}${closing}`;
+      return `${prefix}${quote}${rewriteUrlValue(value, base, endpoint)}${closing}`;
     }).replace(/(\bhref\s*=\s*)(?!["'])([^\s>]+)/i, (match, prefix, value) => {
-      return `${prefix}${rewriteUrl(value, base, endpoint)}`;
+      return `${prefix}${rewriteUrlValue(value, base, endpoint)}`;
     });
   });
 }
 
+function rewriteMetaRefresh(text, base, endpoint) {
+  return text.replace(metaRefreshPattern, (match, prefix, quote, contentQuote, content, suffix) => {
+    const rewritten = content.replace(/(^|;\s*)url\s*=\s*([^;]+)/i, (full, start, value) => {
+      return `${start}url=${rewriteUrlValue(value.trim(), base, endpoint)}`;
+    });
+    return `${prefix}${contentQuote}${rewritten}${contentQuote}${suffix}`;
+  });
+}
+
 export function proxyUrl(value, base, endpoint = "/vanillia?url=") {
-  return rewriteUrl(value, base, endpoint);
+  return rewriteUrlValue(value, base, endpoint);
 }
 
 export function rewriteCss(text, base, endpoint = "/vanillia?url=") {
@@ -52,8 +87,17 @@ export function rewriteHtml(text, base, endpoint = "/vanillia?url=", runtime = "
     return `__VANILLIAPXY_PROTECTED_${index}__`;
   });
 
-  output = output.replace(attributePattern, (match, prefix, quote, value, closing) => {
-    return `${prefix}${quote}${rewriteUrl(value, base, endpoint)}${closing}`;
+  output = output.replace(attributePattern, (match, prefix, doubleQuoted, singleQuoted, unquoted) => {
+    const attributeMatch = prefix.match(/(?:^|[\s<])((?:[A-Za-z_:][\w:.-]*:)?[A-Za-z_:][\w:.-]*)\s*=\s*$/);
+    const name = attributeMatch?.[1]?.toLowerCase();
+    if (!urlAttributes.has(name)) return match;
+
+    const value = doubleQuoted ?? singleQuoted ?? unquoted ?? "";
+    const rewritten = rewriteUrlValue(value, base, endpoint);
+
+    if (doubleQuoted !== undefined) return `${prefix}"${rewritten}"`;
+    if (singleQuoted !== undefined) return `${prefix}'${rewritten}'`;
+    return `${prefix}${rewritten}`;
   });
 
   output = output.replace(srcsetPattern, (match, prefix, quote, value, closing) => {
@@ -61,6 +105,7 @@ export function rewriteHtml(text, base, endpoint = "/vanillia?url=", runtime = "
   });
 
   output = rewriteStylesheetLinks(output, base, endpoint);
+  output = rewriteMetaRefresh(output, base, endpoint);
 
   output = output.replace(/__VANILLIAPXY_PROTECTED_(\d+)__/g, (match, index) => {
     const block = protectedBlocks[Number(index)];
