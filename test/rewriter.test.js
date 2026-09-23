@@ -33,3 +33,21 @@ test("rewriteCss rewrites relative urls", () => {
   const result = rewriteCss("body{background:url('../img/bg.png')}", "https://example.com/css/main.css", endpoint);
   assert.match(result, /https%3A%2F%2Fexample\.com%2Fimg%2Fbg\.png/);
 });
+
+test("rewriteHtml rewrites unquoted and namespaced URL attributes", () => {
+  const result = rewriteHtml('<img src=/img/a.png><svg><use xlink:href="/icons.svg#x"></use></svg>', base, endpoint);
+  assert.match(result, /src=\/proxy\?url=/);
+  assert.match(result, /xlink:href="\/proxy\?url=/);
+});
+
+test("rewriteHtml decodes HTML entities before proxying URLs", () => {
+  const result = rewriteHtml('<a href="/search?a=1&amp;b=2">search</a>', base, endpoint);
+  assert.match(result, /search%3Fa%3D1%26b%3D2/);
+  assert.doesNotMatch(result, /%26amp%3B/);
+});
+
+test("rewriteHtml rewrites meta refresh URLs", () => {
+  const result = rewriteHtml('<meta http-equiv="refresh" content="0;url=/login">', base, endpoint);
+  assert.match(result, /url=\/proxy\?url=/);
+  assert.match(result, /https%3A%2F%2Fexample\.com%2Fapp%2Flogin/);
+});
