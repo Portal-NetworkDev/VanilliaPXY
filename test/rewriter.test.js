@@ -51,3 +51,10 @@ test("rewriteHtml rewrites meta refresh URLs", () => {
   assert.match(result, /url=\/proxy\?url=/);
   assert.match(result, /https%3A%2F%2Fexample\.com%2Fapp%2Flogin/);
 });
+
+test("rewriteHtml rewrites script src while preserving script contents", () => {
+  const result = rewriteHtml('<script src="https://cdn.example.com/app.js">const url = "https://example.com/raw";</script>', base, endpoint);
+  assert.match(result, /src="\/proxy\?url=/);
+  assert.match(result, /https%3A%2F%2Fcdn\.example\.com%2Fapp\.js/);
+  assert.match(result, /const url = "https:\/\/example\.com\/raw";/);
+});
