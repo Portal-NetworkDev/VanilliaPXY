@@ -7,7 +7,7 @@ const urlAttributes = new Set([
 const attributePattern = /([\s<](?:[A-Za-z_:][\w:.-]*:)?[A-Za-z_:][\w:.-]*\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
 const srcsetPattern = /(\bsrcset\s*=\s*)(["'])(.*?)(\2)/gi;
 const stylesheetLinkPattern = /<link\b[^>]*>/gi;
-const protectedBlockPattern = /<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
+const protectedBlockPattern = /(<(script|style)\b[^>]*>)([\s\S]*?)(<\/\2\s*>)/gi;
 const cssUrlPattern = /url\(\s*(["']?)(.*?)\1\s*\)/gi;
 const cssImportPattern = /(@import\s+(?:url\(\s*)?)(["'])([^"']+)(\2)(\s*\)?)/gi;
 const metaRefreshPattern = /(<meta\b[^>]*\bhttp-equiv\s*=\s*(["'])refresh\2[^>]*\bcontent\s*=\s*)(["'])(.*?)\3([^>]*>)/gi;
@@ -82,9 +82,9 @@ export function rewriteCss(text, base, endpoint = "/vanillia?url=") {
 
 export function rewriteHtml(text, base, endpoint = "/vanillia?url=", runtime = "", iconHref = "") {
   const protectedBlocks = [];
-  let output = String(text ?? "").replace(protectedBlockPattern, match => {
-    const index = protectedBlocks.push(match) - 1;
-    return `__VANILLIAPXY_PROTECTED_${index}__`;
+  let output = String(text ?? "").replace(protectedBlockPattern, (match, open, tagName, content, close) => {
+    const index = protectedBlocks.push({ tagName: tagName.toLowerCase(), content }) - 1;
+    return `${open}__VANILLIAPXY_PROTECTED_${index}__${close}`;
   });
 
   output = output.replace(attributePattern, (match, prefix, doubleQuoted, singleQuoted, unquoted) => {
@@ -110,12 +110,8 @@ export function rewriteHtml(text, base, endpoint = "/vanillia?url=", runtime = "
   output = output.replace(/__VANILLIAPXY_PROTECTED_(\d+)__/g, (match, index) => {
     const block = protectedBlocks[Number(index)];
     if (!block) return match;
-    if (/^<style\b/i.test(block)) {
-      return block.replace(/^(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)$/i, (full, open, css, close) => {
-        return `${open}${rewriteCss(css, base, endpoint)}${close}`;
-      });
-    }
-    return block;
+    if (block.tagName === "style") return rewriteCss(block.content, base, endpoint);
+    return block.content;
   });
 
   if (/<base\b/i.test(output)) {
