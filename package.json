@@ -1,6 +1,6 @@
 {
   "name": "vanilliapxy",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Streaming transport backend for browser-side web proxy engines.",
   "type": "module",
   "main": "./src/index.js",
