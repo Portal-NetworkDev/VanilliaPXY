@@ -1,6 +1,10 @@
 const workerScript = `
-const endpoint = "/vanillia?url=";
-const target = new URL(self.location.href).searchParams.get("target");
+const workerUrl = new URL(self.location.href);
+const server = workerUrl.searchParams.get("server") || "";
+const endpoint = server
+  ? "/vanillia?server=" + encodeURIComponent(server) + "&url="
+  : "/vanillia?url=";
+const target = workerUrl.searchParams.get("target");
 
 self.addEventListener("install", event => event.waitUntil(self.skipWaiting()));
 self.addEventListener("activate", event => event.waitUntil(self.clients.claim()));
