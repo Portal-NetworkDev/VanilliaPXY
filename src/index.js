@@ -74,7 +74,8 @@ async function streamBuffer(res, buffer) {
 
 function proxyOrigin(req) {
   const protocol = req.headers["x-forwarded-proto"] || (req.socket.encrypted ? "https" : "http");
-  return `${protocol}://${req.headers.host || "localhost"}`;
+  const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost";
+  return protocol + "://" + host;
 }
 
 function proxyEndpoint(req) {
