@@ -27,6 +27,7 @@ const runtimeSource = String.raw`(() => {
   const base = globalThis.__VANILLIAPXY_TARGET__ || document.baseURI;
   const endpoint = globalThis.__VANILLIAPXY_ENDPOINT__ || "/vanillia?url=";
   const workerEndpoint = globalThis.__VANILLIAPXY_SW__ || "/service-worker.js";
+  const relayServer = new URL(location.href).searchParams.get("server") || "";
   const proxy = value => {
     if (typeof value !== "string" || !value) return value;
     const trimmed = value.trim();
@@ -354,7 +355,9 @@ const runtimeSource = String.raw`(() => {
           if (/^wss?:$/.test(resolved.protocol)) {
             const target = resolved.protocol === "wss:" ? "https:" : "http:";
             const httpTarget = target + "//" + resolved.host + resolved.pathname + resolved.search;
-            next = new URL("/ws?url=" + encodeURIComponent(httpTarget), location.origin).href;
+            const socket = new URL("/ws?url=" + encodeURIComponent(httpTarget), location.origin);
+            if (relayServer) socket.searchParams.set("server", relayServer);
+            next = socket.href;
           }
         } catch {}
         super(next, protocols);
@@ -394,6 +397,7 @@ const runtimeSource = String.raw`(() => {
       const original = new URL(String(scriptURL), base).href;
       const isolated = new URL(workerEndpoint, location.origin);
       isolated.searchParams.set("target", original);
+      if (relayServer) isolated.searchParams.set("server", relayServer);
       const next = { ...options };
       if (next.scope) {
         const scope = new URL(next.scope, base);
