@@ -79,7 +79,12 @@ function proxyOrigin(req) {
 }
 
 function proxyEndpoint(req) {
-  return new URL(endpoint, proxyOrigin(req)).href;
+  const origin = proxyOrigin(req);
+  const requestUrl = new URL(req.url, origin);
+  const server = requestUrl.searchParams.get("server");
+  if (!server) return new URL(endpoint, origin).href;
+  const endpointUrl = new URL(endpoint, origin);
+  return `${endpointUrl.origin}${endpointUrl.pathname}?server=${encodeURIComponent(server)}&url=`;
 }
 
 function proxiedRedirect(location, base, req) {
