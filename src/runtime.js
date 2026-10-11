@@ -28,31 +28,73 @@ const runtimeSource = String.raw`(() => {
   const endpoint = globalThis.__VANILLIAPXY_ENDPOINT__ || "/vanillia?url=";
   const workerEndpoint = globalThis.__VANILLIAPXY_SW__ || "/service-worker.js";
   const relayServer = new URL(location.href).searchParams.get("server") || "";
+  const normalizeAddress = value => {
+    const input = String(value ?? "").trim();
+    const authority = input.split(/[/?#]/, 1)[0];
+    return authority.includes(".") && !input.includes(":") && !input.startsWith("//")
+      ? "https://" + input
+      : input;
+  };
+  const isCaptchaResource = value => {
+    try {
+      const url = new URL(normalizeAddress(value), base);
+      const host = url.hostname.toLowerCase();
+      const isGoogleHost = host === "google.com" || host.endsWith(".google.com");
+      const isRecaptchaHost = host === "recaptcha.net" || host.endsWith(".recaptcha.net");
+      const isGstaticHost = host === "gstatic.com" || host.endsWith(".gstatic.com");
+      const isCaptchaPath = /\/(?:recaptcha|captcha|challenge)(?:\/|$)/i.test(url.pathname);
+      const isGoogleVerifyPath = isGoogleHost && /(?:^|[?&])(?:k|sitekey|render)=/i.test(url.search);
+      return url.protocol === "https:" && (isGoogleHost || isRecaptchaHost || isGstaticHost) &&
+        (isCaptchaPath || isGoogleVerifyPath);
+    } catch { return false; }
+  };
   const proxy = value => {
     if (typeof value !== "string" || !value) return value;
     const trimmed = value.trim();
     if (/^(?:data:|mailto:|javascript:|blob:|about:|#)/i.test(trimmed)) return value;
     if (isProxyUrl(trimmed)) return value;
     try {
-      const resolved = new URL(trimmed, base);
+      const normalized = normalizeAddress(trimmed);
+      if (isCaptchaResource(normalized)) return value;
+      const resolved = new URL(normalized, base);
       if (!/^https?:$/.test(resolved.protocol)) return value;
       return endpoint + encodeURIComponent(resolved.href);
     } catch { return value; }
   };
   const proxySrcset = value => {
     if (typeof value !== "string") return value;
-    return value.split(",").map(candidate => {
-      const match = candidate.trim().match(/^(\S+)(\s+.+)?$/);
-      if (!match) return candidate;
-      return proxy(match[1]) + (match[2] || "");
-    }).join(", ");
+    const candidates = [];
+    let index = 0;
+    while (index < value.length) {
+      while (index < value.length && /[\s,]/.test(value[index])) index++;
+      if (index >= value.length) break;
+      const start = index;
+      while (index < value.length && !/\s/.test(value[index])) index++;
+      let candidateUrl = value.slice(start, index);
+      let endsCandidate = false;
+      while (candidateUrl.endsWith(",")) {
+        candidateUrl = candidateUrl.slice(0, -1);
+        endsCandidate = true;
+      }
+      if (!candidateUrl) continue;
+      let descriptor = "";
+      if (!endsCandidate && index < value.length) {
+        while (index < value.length && /\s/.test(value[index])) index++;
+        const descriptorStart = index;
+        while (index < value.length && value[index] !== ",") index++;
+        descriptor = value.slice(descriptorStart, index).trim();
+        if (value[index] === ",") index++;
+      }
+      candidates.push(proxy(candidateUrl) + (descriptor ? " " + descriptor : ""));
+    }
+    return candidates.join(", ");
   };
   const proxyCss = value => String(value ?? "").replace(/url(\s*\(\s*)(["']?)(.*?)(\2)(\s*\))/gi,
     (match, prefix, quote, url, closingQuote, suffix) => prefix + quote + proxy(url) + closingQuote + suffix
   );
   const proxyMarkup = value => {
     let markup = String(value ?? "");
-    markup = markup.replace(/(\b(?:href|src|poster|cite|formaction|manifest|ping|background|data)\s*=\s*)(["'])(.*?)(\2)/gi,
+    markup = markup.replace(/(\b(?:href|src|poster|cite|formaction|manifest|ping|background|data|xlink:href)\s*=\s*)(["'])(.*?)(\2)/gi,
       (match, prefix, quote, url, closing) => prefix + quote + proxy(url) + closing
     );
     markup = markup.replace(/(\bsrcset\s*=\s*)(["'])(.*?)(\2)/gi,
@@ -123,7 +165,7 @@ const runtimeSource = String.raw`(() => {
       globalThis.Element.prototype.setAttribute = function(name, value) {
         const lower = String(name).toLowerCase();
         if (lower === "srcset") value = proxySrcset(String(value));
-        else if (["src", "href", "poster", "data"].includes(lower)) value = proxy(String(value));
+        else if (["src", "href", "poster", "data", "action", "cite", "formaction", "manifest", "ping", "background", "xlink:href"].includes(lower)) value = proxy(String(value));
         else if (lower === "style") value = proxyCss(String(value));
         return nativeSetAttribute.call(this, name, value);
       };
@@ -312,7 +354,7 @@ const runtimeSource = String.raw`(() => {
       const data = new FormData(form);
       const entries = [...data.entries()].filter(([, value]) => typeof value === "string");
       const targetHost = destination.hostname.toLowerCase();
-      const isGoogleSearch = /(?:^|\\.)google\\.com$/.test(targetHost) && entries.some(([name, value]) => name === "q" && value);
+      const isGoogleSearch = (targetHost === "google.com" || targetHost.endsWith(".google.com")) && entries.some(([name, value]) => name === "q" && value);
       if (isGoogleSearch) {
         destination.pathname = "/search";
         destination.search = "";
