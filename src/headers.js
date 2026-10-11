@@ -110,9 +110,9 @@ export function responseHeaders(headers, { rewritten = false } = {}) {
   for (const [name, value] of Object.entries(headers)) {
     const lower = name.toLowerCase();
     if (value == null || hopByHop.has(lower)) continue;
-    if (rewritten && (lower === "content-security-policy" || lower === "content-security-policy-report-only")) continue;
+    if (rewritten && (lower === "content-security-policy" || lower === "content-security-policy-report-only" || lower === "content-security-policy-report-to")) continue;
     if (lower === "x-frame-options") continue;
-    if (rewritten && lower === "permissions-policy") continue;
+    if (rewritten && ["permissions-policy", "origin-agent-cluster", "cross-origin-opener-policy", "cross-origin-embedder-policy", "cross-origin-resource-policy"].includes(lower)) continue;
     if (lower === "set-cookie") {
       result[name] = normalizeCookies(value);
       continue;
@@ -132,8 +132,8 @@ export function responseHeaders(headers, { rewritten = false } = {}) {
 function normalizeCookies(value) {
   const cookies = Array.isArray(value) ? value : [value];
   return cookies.map(cookie => {
-    let normalized = String(cookie).replace(/;\\s*Domain=[^;]*/gi, "");
-    if (/;\\s*Path=/i.test(normalized)) normalized = normalized.replace(/;\\s*Path=[^;]*/gi, "; Path=/");
+    let normalized = String(cookie).replace(/;\s*Domain=[^;]*/gi, "");
+    if (/;\s*Path=/i.test(normalized)) normalized = normalized.replace(/;\s*Path=[^;]*/gi, "; Path=/");
     else normalized += "; Path=/";
     return normalized;
   });
