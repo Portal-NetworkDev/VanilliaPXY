@@ -49,7 +49,7 @@ test("rewriteHtml decodes HTML entities before proxying URLs", () => {
 test("rewriteHtml rewrites meta refresh URLs", () => {
   const result = rewriteHtml('<meta http-equiv="refresh" content="0;url=/login">', base, endpoint);
   assert.match(result, /url=\/proxy\?url=/);
-  assert.match(result, /https%3A%2F%2Fexample\.com%2Fapp%2Flogin/);
+  assert.match(result, /https%3A%2F%2Fexample\.com%2Flogin/);
 });
 
 test("rewriteHtml rewrites script src while preserving script contents", () => {
@@ -57,4 +57,32 @@ test("rewriteHtml rewrites script src while preserving script contents", () => {
   assert.match(result, /src="\/proxy\?url=/);
   assert.match(result, /https%3A%2F%2Fcdn\.example\.com%2Fapp\.js/);
   assert.match(result, /const url = "https:\/\/example\.com\/raw";/);
+});
+
+test("rewriteHtml rewrites absolute cross-origin CDN links through the proxy", () => {
+  const result = rewriteHtml('<img src="https://cdn.example.com/photo.webp"><link rel="stylesheet" href="https://static.example.net/site.css">', base, endpoint);
+  assert.match(result, /src="\/proxy\?url=https%3A%2F%2Fcdn\.example\.com%2Fphoto\.webp"/);
+  assert.match(result, /href="\/proxy\?url=https%3A%2F%2Fstatic\.example\.net%2Fsite\.css"/);
+});
+
+test("rewriteHtml resolves resources against the upstream base tag", () => {
+  const result = rewriteHtml('<html><head><base href="https://assets.example.net/static/"></head><body><img src="hero.png"></body></html>', base, endpoint);
+  assert.match(result, /<base href="https:\/\/assets\.example\.net\/static\/">/);
+  assert.match(result, /https%3A%2F%2Fassets\.example\.net%2Fstatic%2Fhero\.png/);
+});
+
+test("rewriteHtml resolves a bare CDN host and path through the proxy", () => {
+  const result = rewriteHtml('<img src="cdn.example.com/images/photo.png">', base, endpoint);
+  assert.ok(result.includes('src="/proxy?url=' + encodeURIComponent("https://cdn.example.com/images/photo.png") + '"'));
+});
+
+test("rewriteHtml creates a head for bare html input before injecting runtime", () => {
+  const result = rewriteHtml('<html><body><img src="cdn.example.com/a.png"></body></html>', base, endpoint, "<script>runtime()</script>");
+  assert.ok(result.includes('<head><script>runtime()</script><base href="https://example.com/app/index.html"></head>'));
+});
+
+test("rewriteHtml rewrites inline styles and preserves direct CAPTCHA endpoints", () => {
+  const result = rewriteHtml('<div style="background-image:url(https://cdn.example.com/a.png)"></div><script src="https://www.google.com/recaptcha/api.js"></script>', base, endpoint);
+  assert.match(result, /url\(\/proxy\?url=https%3A%2F%2Fcdn\.example\.com%2Fa\.png\)/);
+  assert.match(result, /src="https:\/\/www\.google\.com\/recaptcha\/api\.js"/);
 });
