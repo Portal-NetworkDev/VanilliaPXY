@@ -6,7 +6,6 @@ const runtimeSource = String.raw`(() => {
   const nativeOpen = XMLHttpRequest.prototype.open;
   const nativeEventSource = globalThis.EventSource;
   const nativeWebSocket = globalThis.WebSocket;
-  const nativeWindowPostMessage = globalThis.postMessage?.bind(globalThis);
   const nativeWindowPrototypePostMessage = globalThis.Window?.prototype?.postMessage;
   const nativeSetAttribute = globalThis.Element?.prototype?.setAttribute;
   const nativeCssSetProperty = globalThis.CSSStyleDeclaration?.prototype?.setProperty;
@@ -333,25 +332,33 @@ const runtimeSource = String.raw`(() => {
       };
     } catch {}
   }
-  if (nativeWindowPostMessage) {
-    try {
-      globalThis.postMessage = function(message, targetOrigin, transfer) {
-        const nextMessage = wrapMessage(message);
-        if (arguments.length >= 3) return nativeWindowPostMessage(nextMessage, "*", transfer);
-        return nativeWindowPostMessage(nextMessage, "*");
-      };
-    } catch {}
-  }
   if (globalThis.HTMLFormElement) {
     document.addEventListener("submit", event => {
       const form = event.target;
       if (!(form instanceof HTMLFormElement)) return;
-      if (String(form.method || "get").toLowerCase() !== "get") return;
+      const method = String(form.method || "get").toLowerCase();
       const action = form.getAttribute("action") || document.baseURI;
       const target = unproxy(action) || new URL(action, base).href;
       if (!/^https?:$/i.test(new URL(target, base).protocol)) return;
       const destination = new URL(target, base);
+      const isDuckDuckGoSearch = method === "post" &&
+        ["html.duckduckgo.com", "lite.duckduckgo.com"].includes(destination.hostname.toLowerCase()) &&
+        /^\/(?:html|lite)\/?$/i.test(destination.pathname);
+      if (method !== "get" && !isDuckDuckGoSearch) return;
+      if (isDuckDuckGoSearch) {
+        const data = new FormData(form);
+        for (const [name, value] of data.entries()) {
+          if (typeof value === "string") destination.searchParams.append(name, value);
+        }
+        event.preventDefault();
+        const next = proxy(destination.href);
+        const targetName = form.target || "_self";
+        if (targetName === "_blank") globalThis.open(next, "_blank", "noopener");
+        else location.assign(next);
+        return;
+      }
       const data = new FormData(form);
+
       const entries = [...data.entries()].filter(([, value]) => typeof value === "string");
       const targetHost = destination.hostname.toLowerCase();
       const isGoogleSearch = (targetHost === "google.com" || targetHost.endsWith(".google.com")) && entries.some(([name, value]) => name === "q" && value);
@@ -406,7 +413,7 @@ const runtimeSource = String.raw`(() => {
       }
     };
   }
-  if (nativeWindowPostMessage && globalThis.Window?.prototype) {
+  if (nativeWindowPrototypePostMessage && globalThis.Window?.prototype) {
     const postMessage = function(message, targetOrigin, transfer) {
       const nextOrigin = messageTarget(targetOrigin);
       if (arguments.length >= 3) return nativeWindowPrototypePostMessage.call(this, message, nextOrigin, transfer);
