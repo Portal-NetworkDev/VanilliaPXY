@@ -3,8 +3,9 @@ import { request } from "undici";
 import { WebSocketServer, WebSocket } from "ws";
 import { server as wisp } from "@mercuryworkshop/wisp-js/server";
 import { validateTarget, validateRedirect } from "./policy.js";
+import { resolveProxyTarget } from "./proxy-target.js";
 import { requestHeaders, responseHeaders } from "./headers.js";
-import { rewriteCss, rewriteHtml } from "./rewriter.js";
+import { rewriteCss, rewriteHtml, rewriteWorkerScript } from "./rewriter.js";
 import { runtimeScript } from "./runtime.js";
 import { serviceWorkerResponse } from "./service-worker.js";
 import { fetchSiteIcon } from "./icon.js";
@@ -40,7 +41,7 @@ function sendError(res, status, message) {
 
 function canRewrite(headers) {
   const type = String(headers["content-type"] || "").toLowerCase();
-  return rewriteEnabled && (type.includes("text/html") || type.includes("text/css"));
+  return rewriteEnabled && (type.includes("text/html") || type.includes("text/css") || type.includes("javascript"));
 }
 
 function bodyBuffer(stream, limit) {
@@ -89,7 +90,12 @@ function proxyEndpoint(req) {
 
 function proxiedRedirect(location, base, req) {
   const absolute = new URL(location, base);
-  return new URL(`${endpoint}${encodeURIComponent(absolute.href)}`, proxyOrigin(req)).href;
+  const destination = new URL(endpoint, proxyOrigin(req));
+  destination.searchParams.set("url", absolute.href);
+  const requestUrl = new URL(req.url, proxyOrigin(req));
+  const redirects = Number(requestUrl.searchParams.get("__vanillia_redirects")) || 0;
+  if (redirects < maxRedirects) destination.searchParams.set("__vanillia_redirects", String(redirects + 1));
+  return destination.href;
 }
 
 async function proxyRequest(req, res, target, redirects = 0) {
@@ -111,19 +117,10 @@ async function proxyRequest(req, res, target, redirects = 0) {
       bodyTimeout: 0
     });
     const location = upstream.headers.location;
-    const replayable = req.method === "GET" || req.method === "HEAD";
-
-    if (location && upstream.statusCode >= 300 && upstream.statusCode < 400 && replayable) {
-      upstream.body.resume();
-      if (redirects >= maxRedirects) return sendError(res, 508, "Too many redirects");
-      const next = await validateRedirect(location, target, allowPrivate);
-      if (!next) return sendError(res, 403, "Redirect target is not allowed");
-      return proxyRequest(req, res, next, redirects + 1);
-    }
 
     const rewrittenResponse = canRewrite(upstream.headers);
-    const headersOut = responseHeaders(upstream.headers, { rewritten: rewrittenResponse });
-    if (location && rewriteEnabled) {
+    const headersOut = responseHeaders(upstream.headers, { rewritten: rewrittenResponse, targetHost: target.hostname });
+    if (location) {
       const redirect = await validateRedirect(location, target, allowPrivate);
       if (!redirect) return sendError(res, 403, "Redirect target is not allowed");
       headersOut.location = proxiedRedirect(location, target, req);
@@ -146,7 +143,9 @@ async function proxyRequest(req, res, target, redirects = 0) {
       : "";
     const rewritten = type.includes("text/css")
       ? rewriteCss(source, target.href, absoluteEndpoint)
-      :rewriteHtml(
+      : type.includes("javascript")
+        ? rewriteWorkerScript(source, target.href, absoluteEndpoint)
+        : rewriteHtml(
   source,
   target.href,
   absoluteEndpoint,
@@ -270,9 +269,11 @@ async function handleRequest(req, res) {
     return;
   }
   if (url.pathname !== "/vanillia") return sendError(res, 404, "Not found");
-  const target = await validateTarget(url.searchParams.get("url"), allowPrivate);
+  const redirectCount = Number(url.searchParams.get("__vanillia_redirects")) || 0;
+  if (redirectCount > maxRedirects) return sendError(res, 508, "Too many redirects");
+  const target = await validateTarget(resolveProxyTarget(url.searchParams), allowPrivate);
   if (!target) return sendError(res, 403, "Target is not allowed");
-  await proxyRequest(req, res, target);
+  await proxyRequest(req, res, target, redirectCount);
 }
 
 server.on("upgrade", (req, socket, head) => {
