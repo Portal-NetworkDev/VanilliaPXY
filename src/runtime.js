@@ -1,3 +1,5 @@
+import { createBlobWorkerBootstrap } from "./blob-worker.js";
+
 const runtimeSource = String.raw`(() => {
   const marker = Symbol.for("VanilliaPXY.runtime");
   if (globalThis[marker]) return;
@@ -5,8 +7,15 @@ const runtimeSource = String.raw`(() => {
   const nativeFetch = globalThis.fetch?.bind(globalThis);
   const nativeOpen = XMLHttpRequest.prototype.open;
   const nativeEventSource = globalThis.EventSource;
+  const nativeWorker = globalThis.Worker;
+  const nativeSharedWorker = globalThis.SharedWorker;
+  const nativeBlob = globalThis.Blob;
   const nativeWebSocket = globalThis.WebSocket;
+  const nativeWindowOpen = globalThis.open?.bind(globalThis);
   const nativeWindowPrototypePostMessage = globalThis.Window?.prototype?.postMessage;
+  const nativeIframeContentWindow = globalThis.HTMLIFrameElement?.prototype
+    ? Object.getOwnPropertyDescriptor(globalThis.HTMLIFrameElement.prototype, "contentWindow")
+    : null;
   const nativeSetAttribute = globalThis.Element?.prototype?.setAttribute;
   const nativeCssSetProperty = globalThis.CSSStyleDeclaration?.prototype?.setProperty;
   const nativeCssText = globalThis.CSSStyleDeclaration
@@ -20,6 +29,17 @@ const runtimeSource = String.raw`(() => {
     : null;
   const nativeInsertAdjacentHTML = globalThis.Element?.prototype?.insertAdjacentHTML;
   const nativeDocumentWrite = globalThis.Document?.prototype?.write;
+  const nativeDocumentCookie = globalThis.Document
+    ? Object.getOwnPropertyDescriptor(globalThis.Document.prototype, "cookie")
+    : null;
+  const nativeLocationAssign = globalThis.Location?.prototype?.assign;
+  const nativeLocationReplace = globalThis.Location?.prototype?.replace;
+  const nativeLocationHref = globalThis.Location
+    ? Object.getOwnPropertyDescriptor(globalThis.Location.prototype, "href")
+    : null;
+  const nativeLocationToString = globalThis.Location?.prototype?.toString;
+  const nativeHistoryPushState = globalThis.History?.prototype?.pushState;
+  const nativeHistoryReplaceState = globalThis.History?.prototype?.replaceState;
   const nativeDocumentWriteln = globalThis.Document?.prototype?.writeln;
   const nativeCreateContextualFragment = globalThis.Range?.prototype?.createContextualFragment;
   const nativeParseFromString = globalThis.DOMParser?.prototype?.parseFromString;
@@ -27,6 +47,15 @@ const runtimeSource = String.raw`(() => {
   const endpoint = globalThis.__VANILLIAPXY_ENDPOINT__ || "/vanillia?url=";
   const workerEndpoint = globalThis.__VANILLIAPXY_SW__ || "/service-worker.js";
   const relayServer = new URL(location.href).searchParams.get("server") || "";
+  const blobWorkerBootstrap = globalThis.__VANILLIAPXY_BLOB_BOOTSTRAP__ || "";
+  const navigateDirectRedirect = value => {
+    if (typeof value !== "string" || !value.trim()) return value;
+    try {
+      const resolved = new URL(value, base);
+      if (!/^https?:$/.test(resolved.protocol)) return value;
+      return resolved.href;
+    } catch { return value; }
+  };
   const normalizeAddress = value => {
     const input = String(value ?? "").trim();
     const authority = input.split(/[/?#]/, 1)[0];
@@ -34,10 +63,49 @@ const runtimeSource = String.raw`(() => {
       ? "https://" + input
       : input;
   };
+  let currentTargetHost = "";
+  const cookieHost = () => {
+    try { return new URL(currentTargetHost || globalThis.__VANILLIAPXY_TARGET__ || base).hostname.toLowerCase().replace(/\.$/, ""); }
+    catch { return ""; }
+  };
+  const currentTargetMeta = document.querySelector?.('meta[data-vanillia-target]');
+  if (currentTargetMeta?.content) currentTargetHost = currentTargetMeta.content;
+  const cookieDomain = cookie => {
+    const host = cookieHost();
+    const requested = String(cookie.match(/(?:^|;\s*)Domain=([^;]+)/i)?.[1] || host).toLowerCase().replace(/^\./, "").replace(/\.$/, "");
+    return host === requested || host.endsWith("." + requested) ? requested : host;
+  };
+  const scopeCookie = value => {
+    const input = String(value ?? "");
+    const pairEnd = input.indexOf(";");
+    const pair = pairEnd < 0 ? input : input.slice(0, pairEnd);
+    const equals = pair.indexOf("=");
+    if (equals <= 0) return input;
+    const name = pair.slice(0, equals).trim();
+    const scope = cookieDomain(input);
+    if (!scope || name.includes("__vanilliapxy_")) return input;
+    const renamed = name + "__vanilliapxy_" + scope + "=" + pair.slice(equals + 1);
+    const attributes = (pairEnd < 0 ? "" : input.slice(pairEnd))
+      .replace(/;\s*Domain=[^;]*/gi, "")
+      .replace(/;\s*Path=[^;]*/i, "; Path=/");
+    return renamed + (attributes.includes("Path=") ? attributes : attributes + "; Path=/");
+  };
+  const visibleCookies = value => String(value ?? "").split(/;\s*/).filter(Boolean).flatMap(cookie => {
+    const equals = cookie.indexOf("=");
+    if (equals <= 0) return [];
+    const name = cookie.slice(0, equals);
+    const marker = name.lastIndexOf("__vanilliapxy_");
+    if (marker < 0) return [];
+    const scope = name.slice(marker + "__vanilliapxy_".length).toLowerCase();
+    const host = cookieHost();
+    if (host !== scope && !host.endsWith("." + scope)) return [];
+    return [name.slice(0, marker) + "=" + cookie.slice(equals + 1)];
+  }).join("; ");
   const isCaptchaResource = value => {
     try {
       const url = new URL(normalizeAddress(value), base);
       const host = url.hostname.toLowerCase();
+      if (host === cookieHost() || host.endsWith("." + cookieHost())) currentTargetHost = url.href;
       const isGoogleHost = host === "google.com" || host.endsWith(".google.com");
       const isRecaptchaHost = host === "recaptcha.net" || host.endsWith(".recaptcha.net");
       const isGstaticHost = host === "gstatic.com" || host.endsWith(".gstatic.com");
@@ -115,6 +183,40 @@ const runtimeSource = String.raw`(() => {
       return false;
     }
   };
+  const isDiscordAuthUrl = value => {
+    try {
+      const url = new URL(value, base);
+      return url.protocol === "https:" &&
+        (url.hostname === "discord.com" || url.hostname === "www.discord.com") &&
+        /^\/(?:login|register|verify|reset)(?:\/|$)/i.test(url.pathname);
+    } catch {
+      return false;
+    }
+  };
+  const proxyNavigation = value => {
+    const normalized = normalizeAddress(value);
+    return isDiscordAuthUrl(normalized) ? endpoint + encodeURIComponent(new URL(normalized, base).href) : proxy(value);
+  };
+  const upstreamNavigationUrl = value => {
+    const unproxied = unproxy(value);
+    if (unproxied) return new URL(unproxied, base).href;
+    return new URL(String(value), base).href;
+  };
+  const installHistoryMethod = (method, nativeMethod) => {
+    if (!globalThis.History?.prototype || !nativeMethod) return;
+    try {
+      globalThis.History.prototype[method] = function(state, unused, url) {
+        if (url == null) return nativeMethod.call(this, state, unused);
+        const upstream = upstreamNavigationUrl(url);
+        const proxied = isDiscordAuthUrl(upstream) ? endpoint + encodeURIComponent(upstream) : proxyNavigation(upstream);
+        const destination = new URL(proxied, location.href);
+        if (destination.origin !== location.origin) throw new DOMException("History URL must remain on the proxy origin", "SecurityError");
+        return nativeMethod.call(this, state, unused, destination.pathname + destination.search + destination.hash);
+      };
+    } catch {}
+  };
+  installHistoryMethod("pushState", nativeHistoryPushState);
+  installHistoryMethod("replaceState", nativeHistoryReplaceState);
   const unproxy = value => {
     try {
       const resolved = new URL(value, location.href);
@@ -127,8 +229,9 @@ const runtimeSource = String.raw`(() => {
   const messageTarget = value => {
     if (typeof value !== "string" || value === "*") return value;
     try {
-      const origin = new URL(value, base).origin;
-      return origin === location.origin ? value : "*";
+      const target = new URL(value, base);
+      if (!/^https?:$/.test(target.protocol)) return value;
+      return target.origin === location.origin ? value : location.origin;
     } catch {
       return value;
     }
@@ -142,7 +245,7 @@ const runtimeSource = String.raw`(() => {
         configurable: descriptor.configurable,
         enumerable: descriptor.enumerable,
         get: descriptor.get,
-        set(value) { return descriptor.set.call(this, proxy(String(value))); }
+      set(value) { return descriptor.set.call(this, proxy(String(value))); }
       });
     } catch {}
   };
@@ -247,6 +350,7 @@ const runtimeSource = String.raw`(() => {
     }
   }
   installUrlProperty(globalThis.HTMLImageElement?.prototype, "src");
+  installUrlProperty(globalThis.HTMLAnchorElement?.prototype, "href");
   installSrcsetProperty(globalThis.HTMLImageElement?.prototype);
   installUrlProperty(globalThis.HTMLIFrameElement?.prototype, "src");
   installUrlProperty(globalThis.HTMLScriptElement?.prototype, "src");
@@ -321,15 +425,101 @@ const runtimeSource = String.raw`(() => {
   installMessageProperty(globalThis.Window?.prototype);
   installMessageProperty(globalThis.MessagePort?.prototype);
   installMessageProperty(globalThis.Worker?.prototype);
-  if (globalThis.Window?.prototype && nativeWindowPrototypePostMessage) {
+  const installWindowPostMessage = windowObject => {
+    if (!windowObject) return;
     try {
-      globalThis.Window.prototype.postMessage = function(message, targetOrigin, transfer) {
+      const nativePostMessage = windowObject.postMessage;
+      if (typeof nativePostMessage !== "function" || nativePostMessage[messageMarker]) return;
+      const wrappedPostMessage = function(message, targetOrigin, transfer) {
         const nextMessage = wrapMessage(message);
-        if (arguments.length >= 3) {
-          return nativeWindowPrototypePostMessage.call(this, nextMessage, "*", transfer);
-        }
-        return nativeWindowPrototypePostMessage.call(this, nextMessage, "*");
+        const nextOrigin = messageTarget(targetOrigin);
+        const postMessage = windowObject === globalThis && nativeWindowPrototypePostMessage
+          ? nativeWindowPrototypePostMessage
+          : nativePostMessage;
+        if (arguments.length >= 3) return postMessage.call(this, nextMessage, nextOrigin, transfer);
+        if (arguments.length >= 2) return postMessage.call(this, nextMessage, nextOrigin);
+        return postMessage.call(this, nextMessage);
       };
+      Object.defineProperty(wrappedPostMessage, messageMarker, { value: true });
+      if (windowObject === globalThis && globalThis.Window?.prototype) {
+        try { globalThis.Window.prototype.postMessage = wrappedPostMessage; } catch {}
+      }
+      windowObject.postMessage = wrappedPostMessage;
+    } catch {}
+  };
+  installWindowPostMessage(globalThis);
+  if (nativeIframeContentWindow?.get && globalThis.HTMLIFrameElement?.prototype) {
+    try {
+      Object.defineProperty(globalThis.HTMLIFrameElement.prototype, "contentWindow", {
+        configurable: nativeIframeContentWindow.configurable,
+        enumerable: nativeIframeContentWindow.enumerable,
+        get() {
+          const childWindow = nativeIframeContentWindow.get.call(this);
+          installWindowPostMessage(childWindow);
+          return childWindow;
+        }
+      });
+    } catch {}
+  }
+  const navigate = (value, method) => {
+    const next = proxyNavigation(String(value));
+    if (method === "replace" && nativeLocationReplace) return nativeLocationReplace.call(location, next);
+    if (nativeLocationAssign) return nativeLocationAssign.call(location, next);
+    return undefined;
+  };
+  if (nativeWindowOpen) {
+    globalThis.open = (value, ...args) => nativeWindowOpen(proxyNavigation(String(value)), ...args);
+  }
+  if (globalThis.Location?.prototype && nativeLocationHref?.get && nativeLocationHref?.set) {
+    try {
+      Object.defineProperty(globalThis.Location.prototype, "href", {
+        configurable: nativeLocationHref.configurable,
+        enumerable: nativeLocationHref.enumerable,
+        get: nativeLocationHref.get,
+        set(value) {
+          const direct = isDirectRedirectNavigation(value);
+          const next = direct || proxyNavigation(String(value));
+          return nativeLocationHref.set.call(this, next);
+        }
+      });
+    } catch {}
+  }
+  const isDirectRedirectNavigation = value => {
+    if (!globalThis.__VANILLIAPXY_DIRECT_REDIRECT_PAGE__) return null;
+    const resolved = navigateDirectRedirect(String(value));
+    const destinations = globalThis.__VANILLIAPXY_DIRECT_REDIRECTS__;
+    return resolved !== value && Array.isArray(destinations) && destinations.includes(resolved) ? resolved : null;
+  };
+  if (globalThis.Location?.prototype) {
+    for (const [method, nativeMethod] of [["assign", nativeLocationAssign], ["replace", nativeLocationReplace]]) {
+      if (!nativeMethod) continue;
+      try {
+        globalThis.Location.prototype[method] = function(value) {
+          const direct = isDirectRedirectNavigation(value);
+          const next = direct || proxyNavigation(String(value));
+          return nativeMethod.call(this, next);
+        };
+      } catch {}
+    }
+    if (nativeLocationToString) {
+      try {
+        globalThis.Location.prototype.toString = function() {
+          const href = nativeLocationHref?.get?.call(this);
+          return proxy(typeof href === "string" ? href : nativeLocationToString.call(this));
+        };
+      } catch {}
+    }
+  }
+  globalThis.__VANILLIAPXY_DIRECT_REDIRECT_PAGE__ = Boolean(document.querySelector?.('meta[data-vanillia-direct-redirect-page="true"]'));
+
+  if (globalThis.Document?.prototype && nativeDocumentCookie?.get && nativeDocumentCookie?.set) {
+    try {
+      Object.defineProperty(globalThis.Document.prototype, "cookie", {
+        configurable: nativeDocumentCookie.configurable,
+        enumerable: nativeDocumentCookie.enumerable,
+        get() { return visibleCookies(nativeDocumentCookie.get.call(this)); },
+        set(value) { return nativeDocumentCookie.set.call(this, scopeCookie(value)); }
+      });
     } catch {}
   }
   if (globalThis.HTMLFormElement) {
@@ -351,7 +541,7 @@ const runtimeSource = String.raw`(() => {
           if (typeof value === "string") destination.searchParams.append(name, value);
         }
         event.preventDefault();
-        const next = proxy(destination.href);
+        const        next = proxyNavigation(destination.href);
         const targetName = form.target || "_self";
         if (targetName === "_blank") globalThis.open(next, "_blank", "noopener");
         else location.assign(next);
@@ -361,7 +551,14 @@ const runtimeSource = String.raw`(() => {
 
       const entries = [...data.entries()].filter(([, value]) => typeof value === "string");
       const targetHost = destination.hostname.toLowerCase();
-      const isGoogleSearch = (targetHost === "google.com" || targetHost.endsWith(".google.com")) && entries.some(([name, value]) => name === "q" && value);
+      const hostLabels = targetHost.split(".");
+      const googleLabel = hostLabels.indexOf("google");
+      const googlePrefix = hostLabels.slice(0, googleLabel).join(".");
+      const googleSuffix = hostLabels.slice(googleLabel + 1);
+      const isGoogleSuffix = (googleSuffix.length === 1 && googleSuffix[0].length >= 2 && googleSuffix[0].length <= 3) ||
+        (googleSuffix.length === 2 && ["co", "com", "net", "org"].includes(googleSuffix[0]) && googleSuffix[1].length === 2);
+      const isGoogleSearchHost = googleLabel >= 0 && (googlePrefix === "" || googlePrefix === "www") && isGoogleSuffix;
+      const isGoogleSearch = isGoogleSearchHost && entries.some(([name, value]) => name === "q" && value);
       if (isGoogleSearch) {
         destination.pathname = "/search";
         destination.search = "";
@@ -370,18 +567,45 @@ const runtimeSource = String.raw`(() => {
         destination.searchParams.append(name, value);
       }
       event.preventDefault();
-      const next = proxy(destination.href);
+      let next;
+      if (isGoogleSearch) {
+        const searchEndpoint = new URL(endpoint, location.href);
+        searchEndpoint.searchParams.delete("url");
+        for (const [name, value] of destination.searchParams) {
+          searchEndpoint.searchParams.append(name, value);
+        }
+        next = searchEndpoint.pathname + searchEndpoint.search;
+      } else {
+        next = proxyNavigation(destination.href);
+      }
       const targetName = form.target || "_self";
       if (targetName === "_blank") globalThis.open(next, "_blank", "noopener");
       else location.assign(next);
     }, true);
   }
+  document.addEventListener("click", event => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const anchor = event.target?.closest?.("a[href]");
+    if (!anchor || anchor.hasAttribute("download")) return;
+    const destination = anchor.href;
+    if (!isDiscordAuthUrl(destination)) return;
+    event.preventDefault();
+    const targetName = anchor.target || "_self";
+    if (targetName.toLowerCase() === "_self") navigate(destination, "assign");
+    else globalThis.open(proxyNavigation(destination), targetName, anchor.rel?.includes("noopener") ? "noopener" : "");
+  }, true);
   if (nativeFetch) {
     globalThis.fetch = (input, init) => {
       if (typeof input === "string" || input instanceof URL) return nativeFetch(proxy(String(input)), init);
       if (input instanceof Request) {
         const url = proxy(input.url);
-        return nativeFetch(url === input.url ? input : new Request(url, input), init);
+        if (url === input.url) return nativeFetch(input, init);
+        const options = init || {};
+        const requestInit = { ...options };
+        if (input.method !== "GET" && input.method !== "HEAD" && input.body !== null && !("duplex" in requestInit)) {
+          requestInit.duplex = "half";
+        }
+        return nativeFetch(new Request(url, input), requestInit);
       }
       return nativeFetch(input, init);
     };
@@ -413,15 +637,6 @@ const runtimeSource = String.raw`(() => {
       }
     };
   }
-  if (nativeWindowPrototypePostMessage && globalThis.Window?.prototype) {
-    const postMessage = function(message, targetOrigin, transfer) {
-      const nextOrigin = messageTarget(targetOrigin);
-      if (arguments.length >= 3) return nativeWindowPrototypePostMessage.call(this, message, nextOrigin, transfer);
-      return nativeWindowPrototypePostMessage.call(this, message, nextOrigin);
-    };
-    try { globalThis.Window.prototype.postMessage = postMessage; } catch {}
-    try { globalThis.postMessage = postMessage.bind(globalThis); } catch {}
-  }
   if (globalThis.MessagePort?.prototype?.postMessage) {
     const nativePortPostMessage = globalThis.MessagePort.prototype.postMessage;
     try {
@@ -439,6 +654,37 @@ const runtimeSource = String.raw`(() => {
         return nativeBroadcastPostMessage.call(this, message);
       };
     } catch {}
+  }
+  if (nativeBlob && nativeWorker) {
+    try {
+      globalThis.Blob = class extends nativeBlob {
+        constructor(parts = [], options = {}) {
+          const blobParts = Array.from(parts);
+          const type = String(options?.type || "").toLowerCase().split(";", 1)[0].trim();
+          const source = blobParts.filter(part => typeof part === "string").join("");
+          if ((!type || /^(?:text|application)\/(?:java|ecma)script$/.test(type)) && source.includes("importScripts")) {
+            blobParts.unshift(blobWorkerBootstrap);
+          }
+          super(blobParts, options);
+        }
+      };
+    } catch {}
+  }
+  if (nativeWorker) {
+    globalThis.Worker = class extends nativeWorker {
+      constructor(scriptURL, options) {
+        const target = new URL(String(scriptURL), base);
+        const next = target.origin === new URL(base).origin && target.pathname.startsWith("/assets/")
+          ? proxy(target.href)
+          : proxy(String(scriptURL));
+        super(next, options);
+      }
+    };
+  }
+  if (nativeSharedWorker) {
+    globalThis.SharedWorker = class extends nativeSharedWorker {
+      constructor(scriptURL, options) { super(proxy(String(scriptURL)), options); }
+    };
   }
   if (navigator.serviceWorker) {
     const nativeRegister = navigator.serviceWorker.register.bind(navigator.serviceWorker);
@@ -458,5 +704,5 @@ const runtimeSource = String.raw`(() => {
 })();`;
 
 export function runtimeScript(endpoint = "/vanillia?url=", workerEndpoint = "/service-worker.js", target = "") {
-  return `<script data-vanillia-runtime>globalThis.__VANILLIAPXY_ENDPOINT__=${JSON.stringify(endpoint)};globalThis.__VANILLIAPXY_SW__=${JSON.stringify(workerEndpoint)};globalThis.__VANILLIAPXY_TARGET__=${JSON.stringify(target)};${runtimeSource}</script>`;
+  return `<script data-vanillia-runtime>globalThis.__VANILLIAPXY_BLOB_BOOTSTRAP__=${JSON.stringify(createBlobWorkerBootstrap(endpoint, target))};globalThis.__VANILLIAPXY_ENDPOINT__=${JSON.stringify(endpoint)};globalThis.__VANILLIAPXY_SW__=${JSON.stringify(workerEndpoint)};globalThis.__VANILLIAPXY_TARGET__=${JSON.stringify(target)};${runtimeSource}</script>`;
 }
