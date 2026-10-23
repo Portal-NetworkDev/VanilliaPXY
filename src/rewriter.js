@@ -139,6 +139,20 @@ export function rewriteCss(text, base, endpoint = "/vanillia?url=") {
   return cssPass(String(text ?? ""), base, endpoint);
 }
 
+function rewriteModuleImports(text, base, endpoint) {
+  const moduleBase = new URL(".", base).href;
+  const dynamicImportPattern = /\bimport\(\s*(["'])\.\/\1\s*\+\s*([\w$]+(?:\.[\w$]+)*\([^()]*\))\s*\)/g;
+  let output = text.replace(dynamicImportPattern, (match, quote, expression) =>
+    `import(${JSON.stringify(endpoint)} + encodeURIComponent(new URL(${expression}, ${JSON.stringify(moduleBase)}).href))`
+  );
+  output = output.replace(/\bimport\.meta\.url\b/g, JSON.stringify(new URL(base).href));
+  const moduleSpecifierPattern = /(\b(?:from\s*|import\s*(?:\(\s*)?))(["'])(\.{1,2}\/[^"']+)\2/g;
+  output = output.replace(moduleSpecifierPattern, (match, prefix, quote, specifier) =>
+    `${prefix}${quote}${rewriteUrl(specifier, base, endpoint)}${quote}`
+  );
+  return output;
+}
+
 export function rewriteWorkerScript(text, base, endpoint = "/vanillia?url=") {
   const workerOrigin = new URL(base).origin;
   const proxyBase = JSON.stringify(endpoint);
@@ -245,7 +259,7 @@ export function rewriteWorkerScript(text, base, endpoint = "/vanillia?url=") {
     calls.lastIndex = cursor;
   }
 
-  return bootstrap + output + source.slice(cursor);
+  return bootstrap + rewriteModuleImports(output + source.slice(cursor), base, endpoint);
 }
 
 export function rewriteHtml(text, base, endpoint = "/vanillia?url=", runtime = "", iconHref = "") {
