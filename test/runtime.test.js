@@ -1,170 +1,546 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { proxyUrl, rewriteCss, rewriteHtml, rewriteWorkerScript } from "../src/rewriter.js";
+import vm from "node:vm";
 
-const base = "https://example.com/app/index.html";
-const endpoint = "/proxy?url=";
+function submitRuntimeForm(method, target, entries, proxyEndpoint = "/vanillia?url=") {
+  let submitListener;
+  let assigned;
+  class HTMLFormElement {
+    constructor() {
+      this.method = method;
+      this.target = "_self";
+    }
+    getAttribute(name) {
+      return name === "action"
+        ? `http://proxy.test/vanillia?url=${encodeURIComponent(target)}`
+        : null;
+    }
+  }
+  class FormData {
+    entries() {
+      return entries;
+    }
+  }
+  class XMLHttpRequest {
+    open() {}
+  }
+  const context = {
+    URL,
+    XMLHttpRequest,
+    HTMLFormElement,
+    FormData,
+    document: {
+      baseURI: target,
+      addEventListener(type, listener) {
+        if (type === "submit") submitListener = listener;
+      }
+    },
+    location: {
+      href: `http://proxy.test/vanillia?url=${encodeURIComponent(target)}`,
+      origin: "http://proxy.test",
+      assign(value) { assigned = value; }
+    },
+    navigator: {}
+  };
+  const script = runtimeScript(proxyEndpoint, "/service-worker.js", target)
+    .replace(/^<script[^>]*>/, "")
+    .replace("</script>", "");
+  vm.runInNewContext(script, context);
+  let prevented = false;
+  submitListener({
+    target: new HTMLFormElement(),
+    preventDefault() { prevented = true; }
+  });
+  return { assigned, prevented };
+}
 
-test("proxyUrl resolves relative resources", () => {
-  assert.equal(
-    proxyUrl("../assets/app.js", base, endpoint),
-    "/proxy?url=" + encodeURIComponent("https://example.com/assets/app.js")
-  );
+function clickRuntimeLink(href, { target = "_self", button = 0, ctrlKey = false } = {}) {
+  let clickListener;
+  let assigned;
+  let opened;
+  function Location() {}
+  Object.defineProperty(Location.prototype, "href", {
+    configurable: true,
+    get() { return "http://proxy.test/vanillia?url=https%3A%2F%2Fdiscord.com%2F"; },
+    set(value) { assigned = value; }
+  });
+  Location.prototype.assign = function(value) { assigned = value; };
+  Location.prototype.replace = function(value) { assigned = value; };
+  Location.prototype.toString = function() { return this.href; };
+  function XMLHttpRequest() {}
+  XMLHttpRequest.prototype.open = function() {};
+  const location = Object.assign(Object.create(Location.prototype), { origin: "http://proxy.test" });
+  class HTMLAnchorElement {}
+  Object.defineProperty(HTMLAnchorElement.prototype, "href", {
+    configurable: true,
+    get() { return this._href; },
+    set(value) { this._href = new URL(value, "https://discord.com/").href; }
+  });
+  const anchor = Object.assign(Object.create(HTMLAnchorElement.prototype), {
+    href,
+    target,
+    rel: "",
+    hasAttribute(name) { return name === "download" ? false : false; }
+  });
+  const context = {
+    URL,
+    Location,
+    HTMLAnchorElement,
+    XMLHttpRequest,
+    document: {
+      baseURI: "https://discord.com/",
+      querySelector() { return null; },
+      addEventListener(type, listener) {
+        if (type === "click") clickListener = listener;
+      }
+    },
+    location,
+    navigator: {},
+    open(value, ...args) { opened = [value, ...args]; }
+  };
+  const script = runtimeScript("http://proxy.test/vanillia?url=", "/service-worker.js", "https://discord.com/")
+    .replace(/^<script[^>]*>/, "")
+    .replace(/<\/script>$/, "");
+  vm.runInNewContext(script, context);
+  let prevented = false;
+  clickListener({
+    target: { closest() { return anchor; } },
+    button,
+    ctrlKey,
+    metaKey: false,
+    shiftKey: false,
+    altKey: false,
+    defaultPrevented: false,
+    preventDefault() { prevented = true; }
+  });
+  return { assigned, opened, prevented };
+}
+
+function runWorkerRuntime(scriptUrl) {
+  let requestedScript;
+  let requestedOptions;
+  class Worker {
+    constructor(url, options) {
+      requestedScript = url;
+      requestedOptions = options;
+    }
+  }
+  class HTMLAnchorElement {}
+  Object.defineProperty(HTMLAnchorElement.prototype, "href", {
+    configurable: true,
+    get() { return this._href; },
+    set(value) { this._href = new URL(value, "https://discord.com/").href; }
+  });
+  function XMLHttpRequest() {}
+  XMLHttpRequest.prototype.open = function() {};
+  const document = {
+    baseURI: "https://discord.com/login",
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener() {}
+  };
+  const context = {
+    URL,
+    Worker,
+    HTMLAnchorElement,
+    XMLHttpRequest,
+    document,
+    location: { href: "http://proxy.test/vanillia?url=https%3A%2F%2Fdiscord.com%2Flogin", origin: "http://proxy.test" },
+    navigator: {}
+  };
+  const script = runtimeScript("http://proxy.test/vanillia?url=", "/service-worker.js", "https://discord.com/login")
+    .replace(/^<script[^>]*>/, "")
+    .replace(/<\/script>$/, "");
+  vm.runInNewContext(script, context);
+  new context.Worker(scriptUrl, { type: "module" });
+  return { requestedScript, requestedOptions };
+}
+
+function runBlobWorkerRuntime(source) {
+  const createdBlobs = [];
+  class Blob {
+    constructor(parts, options) {
+      this.parts = parts;
+      this.type = options?.type || "";
+      createdBlobs.push(this);
+    }
+  }
+  class Worker {
+    constructor(url) { this.url = url; }
+  }
+  function XMLHttpRequest() {}
+  XMLHttpRequest.prototype.open = function() {};
+  const context = {
+    URL,
+    Blob,
+    Worker,
+    XMLHttpRequest,
+    document: { baseURI: "https://discord.com/login", querySelector() { return null; }, querySelectorAll() { return []; }, addEventListener() {} },
+    location: { href: "http://proxy.test/vanillia?url=https%3A%2F%2Fdiscord.com%2Flogin", origin: "http://proxy.test" },
+    navigator: {}
+  };
+  const script = runtimeScript("http://proxy.test/vanillia?url=", "/service-worker.js", "https://discord.com/login")
+    .replace(/^<script[^>]*>/, "")
+    .replace("</script>", "");
+  vm.runInNewContext(script, context);
+  const blob = new context.Blob([source], { type: "text/javascript" });
+  const worker = new context.Worker("blob:test-worker");
+  return { blob, worker, createdBlobs };
+}
+
+function runHistoryRuntime(method, url) {
+  let requestedUrl;
+  let requestedState;
+  class History {
+    [method](state, unused, nextUrl) {
+      if (nextUrl != null && new URL(nextUrl, "http://proxy.test/").origin !== "http://proxy.test") {
+        const error = new Error("History URL must remain on the proxy origin");
+        error.name = "SecurityError";
+        throw error;
+      }
+      requestedState = state;
+      requestedUrl = nextUrl;
+    }
+  }
+  function XMLHttpRequest() {}
+  XMLHttpRequest.prototype.open = function() {};
+  const context = {
+    URL,
+    History,
+    XMLHttpRequest,
+    history: Object.create(History.prototype),
+    document: {
+      baseURI: "https://discord.com/login",
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+      addEventListener() {}
+    },
+    location: {
+      href: "http://proxy.test/vanillia?url=https%3A%2F%2Fdiscord.com%2Flogin",
+      origin: "http://proxy.test"
+    },
+    navigator: {}
+  };
+  const script = runtimeScript("http://proxy.test/vanillia?url=", "/service-worker.js", "https://discord.com/login")
+    .replace(/^<script[^>]*>/, "")
+    .replace("</script>", "");
+  vm.runInNewContext(script, context);
+  context.history[method]({ route: "login" }, "", url);
+  return { requestedUrl, requestedState };
+}
+
+function runSameOriginHistoryRuntime() {
+  let requestedUrl;
+  class History {
+    pushState(state, unused, url) { requestedUrl = url; }
+  }
+  function XMLHttpRequest() {}
+  XMLHttpRequest.prototype.open = function() {};
+  const context = {
+    URL,
+    History,
+    history: Object.create(History.prototype),
+    XMLHttpRequest,
+    document: { baseURI: "https://discord.com/login", querySelector() { return null; }, querySelectorAll() { return []; }, addEventListener() {} },
+    location: { href: "http://proxy.test/vanillia?url=https%3A%2F%2Fdiscord.com%2Flogin", origin: "http://proxy.test" },
+    navigator: {}
+  };
+  const script = runtimeScript("http://proxy.test/vanillia?url=", "/service-worker.js", "https://discord.com/login")
+    .replace(/^<script[^>]*>/, "")
+    .replace("</script>", "");
+  vm.runInNewContext(script, context);
+  context.history.pushState({}, "", "http://proxy.test/vanillia?url=https%3A%2F%2Fdiscord.com%2Flogin");
+  return requestedUrl;
+}
+
+function runStreamingRequestFetchRuntime() {
+  let fetchedRequest;
+  let fetchedInit;
+  class XMLHttpRequest {
+    open() {}
+  }
+  const context = {
+    URL,
+    Request,
+    fetch(request, init) {
+      fetchedRequest = request;
+      fetchedInit = init;
+      return Promise.resolve("ok");
+    },
+    XMLHttpRequest,
+    document: { baseURI: "https://www.google.com/", querySelector() { return null; }, addEventListener() {} },
+    location: { href: "http://proxy.test/vanillia?url=https%3A%2F%2Fwww.google.com%2F", origin: "http://proxy.test" },
+    navigator: {}
+  };
+  const script = runtimeScript("http://proxy.test/vanillia?url=", "/service-worker.js", "https://www.google.com/")
+    .replace(/^<script[^>]*>/, "")
+    .replace("</script>", "");
+  vm.runInNewContext(script, context);
+  const request = new Request("https://www.google.com/rpc", {
+    method: "POST",
+    body: "payload",
+    duplex: "half"
+  });
+  const result = context.fetch(request, { method: "POST" });
+  return result.then(() => ({ fetchedRequest, fetchedInit }));
+}
+
+function runProxyOriginPostMessageRuntime() {
+  let topArguments;
+  let frameArguments;
+  const frameWindow = {
+    postMessage(...args) { frameArguments = args; }
+  };
+  function Window() {}
+  Window.prototype.postMessage = function(...args) { topArguments = args; };
+  function HTMLIFrameElement() {}
+  Object.defineProperty(HTMLIFrameElement.prototype, "contentWindow", {
+    configurable: true,
+    get() { return frameWindow; }
+  });
+  function XMLHttpRequest() {}
+  XMLHttpRequest.prototype.open = function() {};
+  const context = {
+    URL,
+    Window,
+    HTMLIFrameElement,
+    XMLHttpRequest,
+    postMessage(...args) { topArguments = args; },
+    document: { baseURI: "https://accounts.google.com/v3/signin/", querySelector() { return null; }, querySelectorAll() { return []; }, addEventListener() {} },
+    location: { href: "http://proxy.test/vanillia?url=https%3A%2F%2Faccounts.google.com%2Fv3%2Fsignin%2Fidentifier", origin: "http://proxy.test" },
+    navigator: {}
+  };
+  const script = runtimeScript("http://proxy.test/vanillia?url=", "/service-worker.js", "https://accounts.google.com/v3/signin/")
+    .replace(/^<script[^>]*>/, "")
+    .replace("</script>", "");
+  vm.runInNewContext(script, context);
+  context.postMessage({ type: "ready" }, "https://accounts.google.com");
+  const iframe = new context.HTMLIFrameElement();
+  iframe.contentWindow.postMessage({ type: "ready" }, "https://accounts.google.com");
+  return { topArguments, frameArguments };
+}
+
+function runCookieRuntime() {
+  let storedCookie = "";
+  function Document() {}
+  Object.defineProperty(Document.prototype, "cookie", {
+    configurable: true,
+    get() { return storedCookie; },
+    set(value) { storedCookie = value; }
+  });
+  function Location() {}
+  Object.defineProperty(Location.prototype, "href", {
+    configurable: true,
+    get() { return "https://proxy.test/"; },
+    set() {}
+  });
+  Location.prototype.assign = function() {};
+  Location.prototype.replace = function() {};
+  Location.prototype.toString = function() { return this.href; };
+  Location.prototype.toString = function() { return this.href; };
+  function Element() {}
+  Element.prototype = {};
+  function EventTarget() {}
+  EventTarget.prototype = {};
+  function XMLHttpRequest() {}
+  const document = Object.assign(Object.create(Document.prototype), {
+    baseURI: "https://accounts.google.com/",
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener() {}
+  });
+  const context = {
+    URL,
+    Document,
+    Location,
+    Element,
+    EventTarget,
+    XMLHttpRequest,
+    document,
+    location: { href: "https://proxy.test/vanillia?url=https%3A%2F%2Faccounts.google.com%2F", origin: "https://proxy.test" },
+    navigator: {}
+  };
+  const script = runtimeScript("/vanillia?url=", "/service-worker.js", "https://accounts.google.com/")
+    .replace(/^<script[^>]*>/, "")
+    .replace(/<\/script>$/, "");
+  vm.runInNewContext(script, context);
+  return { document, context, get storedCookie() { return storedCookie; } };
+}
+
+function decodeProxiedLocation(location) {
+  const proxyUrl = new URL(location, "http://proxy.test");
+  return new URL(proxyUrl.searchParams.get("url"));
+}
+
+import { runtimeScript } from "../src/runtime.js";
+
+test("runtimeScript emits a self-contained runtime", () => {
+  const script = runtimeScript("/vanillia?url=");
+  assert.match(script, /__VANILLIAPXY_ENDPOINT__/);
+  assert.match(script, /XMLHttpRequest\.prototype\.open/);
+  assert.match(script, /globalThis\.fetch/);
+  assert.doesNotMatch(script, /undefinedundefined/);
 });
 
-test("proxyUrl preserves non-http schemes", () => {
-  assert.equal(proxyUrl("data:text/plain,ok", base, endpoint), "data:text/plain,ok");
-  assert.equal(proxyUrl("javascript:void(0)", base, endpoint), "javascript:void(0)");
+test("runtimeScript uses the proxy endpoint", () => {
+  assert.match(runtimeScript(), /\/vanillia\?url=/);
+  assert.doesNotMatch(runtimeScript(), /\/proxy\?url=/);
 });
 
-test("rewriteWorkerScript rewrites Rspack dynamic chunk imports against the worker's upstream base", () => {
-  const source = 'const chunk = import("./"+__webpack_require__.u(id));';
-  const result = rewriteWorkerScript(source, "https://github.githubassets.com/assets/wp-runtime-821e53a8825beeb4.js", endpoint);
-  const expected = "https://github.githubassets.com/assets/";
-  assert.ok(result.includes(`import(${JSON.stringify(endpoint)} + encodeURIComponent(new URL(__webpack_require__.u(id), ${JSON.stringify(expected)}).href))`));
+test("runtime captures the native Window message method before wrapping it", () => {
+  const script = runtimeScript();
+  assert.match(script, /nativeWindowPrototypePostMessage = globalThis\.Window\?\.prototype\?\.postMessage/);
+  assert.doesNotMatch(script, /nativeWindowPostMessage/);
 });
 
-test("rewriteWorkerScript rewrites import.meta.url to the upstream module URL", () => {
-  const result = rewriteWorkerScript('const base = import.meta.url;', "https://github.githubassets.com/assets/wp-runtime.js", endpoint);
-  assert.ok(result.endsWith('const base = "https://github.githubassets.com/assets/wp-runtime.js";'));
+test("runtime proxies cross-origin Worker scripts to avoid browser origin SecurityErrors", () => {
+  const target = "https://discord.com/assets/login-worker.js";
+  const result = runWorkerRuntime(target);
+  const workerUrl = new URL(result.requestedScript);
+  assert.equal(workerUrl.origin, "http://proxy.test");
+  assert.equal(workerUrl.pathname, "/vanillia");
+  assert.equal(workerUrl.searchParams.get("url"), target);
+  assert.equal(result.requestedOptions.type, "module");
+
 });
 
-test("rewriteWorkerScript rewrites static relative module imports through the proxy", () => {
-  const source = 'import { __webpack_require__ } from "./wp-runtime-821e53a8825beeb4.js";';
-  const result = rewriteWorkerScript(source, "https://github.githubassets.com/assets/environment.js", endpoint);
-  assert.ok(result.includes('from "' + endpoint + encodeURIComponent("https://github.githubassets.com/assets/wp-runtime-821e53a8825beeb4.js") + '"'));
+test("runtime bootstraps importScripts in script Blobs used by blob Workers", () => {
+  const source = 'importScripts("/assets/chunk.js")';
+  const result = runBlobWorkerRuntime(source);
+  assert.equal(result.blob.parts.length, 2);
+  assert.match(result.blob.parts[0], /nativeImportScripts/);
+  assert.match(result.blob.parts[0], /proxyEndpoint\.href \+ encodeURIComponent\(target\.href\)/);
+  assert.equal(result.blob.parts[1], source);
+
+  let imported;
+  const worker = {
+    URL,
+    location: { origin: "http://proxy.test" },
+    importScripts(...urls) { imported = urls; }
+  };
+  vm.runInNewContext(result.blob.parts[0], worker);
+  worker.importScripts("/assets/chunk.js");
+  const chunk = new URL(imported[0]);
+  assert.equal(chunk.origin, "http://proxy.test");
+  assert.equal(chunk.pathname, "/vanillia");
+  assert.equal(chunk.searchParams.get("url"), "https://discord.com/assets/chunk.js");
 });
 
-test("rewriteWorkerScript proxies importScripts chunk URLs through the proxy endpoint", () => {
-  const source = 'importScripts(i.p + i.u(e))';
-  const result = rewriteWorkerScript(source, "https://discord.com/assets/worker.js", endpoint);
-  assert.match(result, /importScripts\(\.\.\.\[i\.p \+ i\.u\(e\)\]\.map\(url =>/);
-  assert.match(result, /\/proxy\?url=/);
-  assert.match(result, /https:\/\/discord\.com/);
-  assert.match(result, /globalThis\.importScripts = \(\.\.\.urls\) => nativeImportScripts\(\.\.\.urls\.map\(proxy\)\)/);
-  assert.match(result, /globalThis\.XMLHttpRequest\.prototype\.open = function\(method, url, \.\.\.rest\)/);
-  assert.match(result, /globalThis\.fetch = \(input, init\) =>/);
-  assert.match(result, /navigator\.serviceWorker\.register = \(scriptURL, options\)/);
-  assert.match(result, /registration\.searchParams\.set\("target", target\.href\)/);
+test("runtime leaves non-worker and non-script Blobs untouched", () => {
+  const result = runBlobWorkerRuntime("self.onmessage = () => {};");
+  assert.equal(result.blob.parts.length, 1);
+  assert.equal(result.blob.parts[0], "self.onmessage = () => {};");
 });
 
-test("rewriteWorkerScript leaves blob importScripts chunks untouched", () => {
-  const source = 'importScripts(URL.createObjectURL(new Blob(["chunk"], { type: "text/javascript" })))';
-  const result = rewriteWorkerScript(source, "https://discord.com/assets/worker.js", endpoint);
-  assert.ok(result.includes('new URL(url, "https://discord.com")'));
-  assert.ok(result.includes('new URL(input, base)'));
-  assert.match(result, /target\.hash = ""/);
-  assert.match(result, /encodeURIComponent\(target\.href\) \+ fragment/);
+test("runtime rewrites Discord History API URLs to the proxy origin", () => {
+  for (const method of ["pushState", "replaceState"]) {
+    const result = runHistoryRuntime(method, "https://discord.com/");
+    const assigned = new URL(result.requestedUrl, "http://proxy.test");
+    assert.equal(assigned.origin, "http://proxy.test");
+    assert.equal(assigned.pathname, "/vanillia");
+    assert.equal(assigned.searchParams.get("url"), "https://discord.com/");
+    assert.ok(!result.requestedUrl.startsWith("http://"));
+    assert.deepEqual(result.requestedState, { route: "login" });
+  }
 });
 
-test("rewriteWorkerScript balances nested call parentheses in importScripts arguments", () => {
-  const result = rewriteWorkerScript('importScripts(i.p + i.u(e))', "https://discord.com/assets/worker.js", endpoint);
-  assert.match(result, /importScripts\(\.\.\.\[i\.p \+ i\.u\(e\)\]\.map\(url =>/);
+test("runtime keeps same-origin proxied History URLs relative so Chromium accepts them", () => {
+  const requestedUrl = runSameOriginHistoryRuntime();
+  assert.ok(requestedUrl.startsWith("/vanillia?url="));
+  assert.equal(new URL(requestedUrl, "http://proxy.test").origin, "http://proxy.test");
 });
 
-test("rewriteHtml rewrites resource attributes", () => {
-  const result = rewriteHtml('<img src="/img/a.png"><a href="/next">next</a>', base, endpoint);
-  assert.match(result, /\/proxy\?url=/);
-  assert.match(result, /https%3A%2F%2Fexample\.com%2Fimg%2Fa\.png/);
-  assert.match(result, /https%3A%2F%2Fexample\.com%2Fnext/);
+test("runtime preserves proxied Discord URLs passed to History API", () => {
+  const url = "http://proxy.test/vanillia?url=" + encodeURIComponent("https://discord.com/register");
+  const result = runHistoryRuntime("replaceState", url);
+  const assigned = new URL(result.requestedUrl, "http://proxy.test");
+  assert.equal(assigned.origin, "http://proxy.test");
+  assert.equal(assigned.searchParams.get("url"), "https://discord.com/register");
 });
 
-test("rewriteHtml injects runtime before head close", () => {
-  const result = rewriteHtml("<html><head></head><body></body></html>", base, endpoint, "<script>runtime()</script>");
-  assert.equal(result, "<html><head><script>runtime()</script><base href=\"https://example.com/app/index.html\"></head><body></body></html>");
+test("runtime keeps Discord login and register links on the proxy origin", () => {
+  for (const path of ["/login", "/register"]) {
+    const target = `https://discord.com${path}`;
+    const result = clickRuntimeLink(target);
+    assert.equal(result.prevented, true);
+    const assignedUrl = new URL(result.assigned, "http://proxy.test");
+    assert.equal(assignedUrl.searchParams.get("url"), target);
+    assert.equal(assignedUrl.origin, "http://proxy.test");
+    assert.equal(assignedUrl.pathname, "/vanillia");
+  }
 });
 
-test("rewriteCss rewrites relative urls", () => {
-  const result = rewriteCss("body{background:url('../img/bg.png')}", "https://example.com/css/main.css", endpoint);
-  assert.match(result, /https%3A%2F%2Fexample\.com%2Fimg%2Fbg\.png/);
+test("runtime opens proxied Discord login in a requested new tab", () => {
+  const target = "https://discord.com/login";
+  const result = clickRuntimeLink(target, { target: "_blank" });
+  assert.equal(result.prevented, true);
+  assert.equal(result.opened[1], "_blank");
+  const openedUrl = new URL(result.opened[0], "http://proxy.test");
+  assert.equal(openedUrl.searchParams.get("url"), target);
+  assert.equal(openedUrl.origin, "http://proxy.test");
+  assert.equal(openedUrl.pathname, "/vanillia");
 });
 
-test("rewriteHtml rewrites unquoted and namespaced URL attributes", () => {
-  const result = rewriteHtml('<img src=/img/a.png><svg><use xlink:href="/icons.svg#x"></use></svg>', base, endpoint);
-  assert.match(result, /src=\/proxy\?url=/);
-  assert.match(result, /xlink:href="\/proxy\?url=/);
+test("runtime lets modified clicks keep the rewritten proxied login link", () => {
+  const target = "https://discord.com/login";
+  const result = clickRuntimeLink(target, { ctrlKey: true });
+  assert.equal(result.prevented, false);
+  assert.equal(result.assigned, undefined);
 });
 
-test("rewriteHtml decodes HTML entities before proxying URLs", () => {
-  const result = rewriteHtml('<a href="/search?a=1&amp;b=2">search</a>', base, endpoint);
-  assert.match(result, /search%3Fa%3D1%26b%3D2/);
-  assert.doesNotMatch(result, /%26amp%3B/);
+test("runtime preserves duplex for proxied streaming Request fetches", async () => {
+  const { fetchedRequest, fetchedInit } = await runStreamingRequestFetchRuntime();
+  assert.equal(fetchedRequest.url, "http://proxy.test/vanillia?url=" + encodeURIComponent("https://www.google.com/rpc"));
+  assert.equal(fetchedRequest.method, "POST");
+  assert.equal(fetchedInit.duplex, "half");
 });
 
-test("rewriteHtml preserves direct meta-refresh and JavaScript redirect destinations", () => {
-  const input = '<!-- wp:html --><meta charset="UTF-8"><title>Redirecting...</title>' +
-    '<meta http-equiv="refresh" content="0;url=https://example.com/new-page">' +
-    '<script>window.location.replace("https://www.portal-network.com/");</script>' +
-    '<p><a href="https://www.portal-network.com/">Continue</a></p><!-- /wp:html -->';
-  const result = rewriteHtml(input, base, endpoint, "<script>runtime()</script>");
-  assert.match(result, /content="0;url=https:\/\/example\.com\/new-page"/);
-  assert.match(result, /window\.location\.replace\("https:\/\/www\.portal-network\.com\/"\)/);
-  assert.match(result, /<a href="https:\/\/www\.portal-network\.com\/"[^>]*>Continue<\/a>/);
-  assert.doesNotMatch(result, /content="0;url=\/proxy/);
-  assert.doesNotMatch(result, /window\.location\.replace\("\/proxy/);
+test("runtime wraps proxy-window postMessage without recursing into the wrapper", () => {
+  const { topArguments, frameArguments } = runProxyOriginPostMessageRuntime();
+  for (const args of [topArguments, frameArguments]) {
+    assert.equal(args[1], "http://proxy.test");
+    assert.equal(args[0].origin, "https://accounts.google.com");
+    assert.deepEqual(args[0].data, { type: "ready" });
+  }
 });
 
-test("rewriteHtml still proxies unrelated links on a page with a redirect", () => {
-  const result = rewriteHtml('<meta http-equiv="refresh" content="0;url=https://example.com/new-page"><a href="https://example.org/other">Other</a>', base, endpoint);
-  assert.match(result, /href="\/proxy\?url=https%3A%2F%2Fexample\.org%2Fother"/);
-  assert.match(result, /content="0;url=https:\/\/example\.com\/new-page"/);
+test("runtime scopes document cookies by upstream domain and only exposes each site's cookies", () => {
+  const runtime = runCookieRuntime();
+  runtime.document.cookie = "SID=google-session; Domain=.google.com; Path=/; Secure";
+  assert.equal(runtime.document.cookie, "SID=google-session");
+  assert.ok(runtime.storedCookie.startsWith("SID__vanilliapxy_google.com=google-session;"));
+  runtime.context.__VANILLIAPXY_TARGET__ = "https://discord.com/";
+  runtime.document.baseURI = "https://discord.com/";
+  assert.equal(runtime.document.cookie, "");
+  runtime.document.cookie = "SID=discord-session; Domain=discord.com; Path=/; Secure";
+  assert.equal(runtime.document.cookie, "SID=discord-session");
+  assert.ok(runtime.storedCookie.includes("SID__vanilliapxy_discord.com=discord-session"));
 });
 
-test("rewriteHtml rewrites script src while preserving script contents", () => {
-  const result = rewriteHtml('<script src="https://cdn.example.com/app.js">const url = "https://example.com/raw";</script>', base, endpoint);
-  assert.match(result, /src="\/proxy\?url=/);
-  assert.match(result, /https%3A%2F%2Fcdn\.example\.com%2Fapp\.js/);
-  assert.match(result, /const url = "https:\/\/example\.com\/raw";/);
+test("runtime routes DuckDuckGo HTML POST search forms through supported GET search URLs", () => {
+  const target = "https://html.duckduckgo.com/html/";
+  const result = submitRuntimeForm("post", target, [["q", "test search"], ["kl", "us-en"]]);
+  assert.equal(result.prevented, true);
+  assert.equal(decodeProxiedLocation(result.assigned).href, `${target}?q=test+search&kl=us-en`);
 });
 
-test("rewriteHtml rewrites absolute cross-origin CDN links through the proxy", () => {
-  const result = rewriteHtml('<img src="https://cdn.example.com/photo.webp"><link rel="stylesheet" href="https://static.example.net/site.css">', base, endpoint);
-  assert.match(result, /src="\/proxy\?url=https%3A%2F%2Fcdn\.example\.com%2Fphoto\.webp"/);
-  assert.ok(result.includes('href="/proxy?url=' + encodeURIComponent("https://static.example.net/site.css") + '"'));
+test("runtime leaves non-DuckDuckGo POST forms as POST submissions", () => {
+  const result = submitRuntimeForm("post", "https://example.com/search", [["q", "test"]]);
+  assert.equal(result.prevented, false);
+  assert.equal(result.assigned, undefined);
 });
 
-test("rewriteHtml removes stale integrity hashes from proxied stylesheet links and preloads", () => {
-  const html = '<link rel="stylesheet" href="https://cdn.example.com/site.css" integrity="sha384-stale" crossorigin="anonymous">' +
-    '<link rel="preload" as="style" href="https://cdn.example.com/next.css" integrity="sha384-old">';
-  const result = rewriteHtml(html, base, endpoint);
-  assert.match(result, /href="\/proxy\?url=https%3A%2F%2Fcdn\.example\.com%2Fsite\.css"/);
-  assert.match(result, /href="\/proxy\?url=https%3A%2F%2Fcdn\.example\.com%2Fnext\.css"/);
-  assert.doesNotMatch(result, /integrity=/i);
-  assert.match(result, /crossorigin="anonymous"/);
+test("runtime routes Google search form submissions to /vanillia?q=", () => {
+  const target = "https://www.google.com/";
+  const result = submitRuntimeForm("get", target, [["q", "example search"], ["source", "hp"]]);
+  assert.equal(result.prevented, true);
+  assert.equal(result.assigned, "/vanillia?q=example+search&source=hp");
 });
 
-test("rewriteHtml retains integrity hashes when stylesheet URLs stay direct", () => {
-  const html = '<link rel="stylesheet" href="https://www.google.com/recaptcha/styles.css" integrity="sha384-valid">';
-  const result = rewriteHtml(html, base, endpoint);
-  assert.match(result, /href="https:\/\/www\.google\.com\/recaptcha\/styles\.css"/);
-  assert.match(result, /integrity="sha384-valid"/);
+test("runtime recognizes Google country-domain search forms", () => {
+  const target = "https://www.google.co.uk/";
+  const result = submitRuntimeForm("get", target, [["q", "example search"]]);
+  assert.equal(result.prevented, true);
+  assert.equal(result.assigned, "/vanillia?q=example+search");
 });
 
-test("rewriteHtml proxies Discord login links instead of sending users to discord.com directly", () => {
-  const result = rewriteHtml('<a href="https://discord.com/login">Log In</a><a href="https://discord.com/register">Register</a>', "https://discord.com/", endpoint);
-  assert.ok(result.includes('href="' + endpoint + encodeURIComponent("https://discord.com/login") + '"'));
-  assert.ok(result.includes('href="' + endpoint + encodeURIComponent("https://discord.com/register") + '"'));
-  assert.doesNotMatch(result, /href="https:\/\/discord\.com\/(?:login|register)"/);
-});
-
-test("rewriteHtml resolves resources against the upstream base tag", () => {
-  const result = rewriteHtml('<html><head><base href="https://assets.example.net/static/"></head><body><img src="hero.png"></body></html>', base, endpoint);
-  assert.match(result, /<base href="https:\/\/assets\.example\.net\/static\/">/);
-  assert.match(result, /https%3A%2F%2Fassets\.example\.net%2Fstatic%2Fhero\.png/);
-});
-
-test("rewriteHtml resolves a bare CDN host and path through the proxy", () => {
-  const result = rewriteHtml('<img src="cdn.example.com/images/photo.png">', base, endpoint);
-  assert.ok(result.includes('src="/proxy?url=' + encodeURIComponent("https://cdn.example.com/images/photo.png") + '"'));
-});
-
-test("rewriteHtml creates a head for bare html input before injecting runtime", () => {
-  const result = rewriteHtml('<html><body><img src="cdn.example.com/a.png"></body></html>', base, endpoint, "<script>runtime()</script>");
-  assert.ok(result.includes('<head><script>runtime()</script><base href="https://example.com/app/index.html"></head>'));
-});
-
-test("rewriteHtml rewrites inline styles and preserves direct CAPTCHA endpoints", () => {
-  const result = rewriteHtml('<div style="background-image:url(https://cdn.example.com/a.png)"></div><script src="https://www.google.com/recaptcha/api.js"></script>', base, endpoint);
-  assert.match(result, /url\(\/proxy\?url=https%3A%2F%2Fcdn\.example\.com%2Fa\.png\)/);
-  assert.match(result, /src="https:\/\/www\.google\.com\/recaptcha\/api\.js"/);
-});
