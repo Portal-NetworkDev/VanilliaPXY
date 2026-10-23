@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { proxyUrl, rewriteCss, rewriteHtml } from "../src/rewriter.js";
+import { proxyUrl, rewriteCss, rewriteHtml, rewriteWorkerScript } from "../src/rewriter.js";
 
 const base = "https://example.com/app/index.html";
 const endpoint = "/proxy?url=";
@@ -15,6 +15,51 @@ test("proxyUrl resolves relative resources", () => {
 test("proxyUrl preserves non-http schemes", () => {
   assert.equal(proxyUrl("data:text/plain,ok", base, endpoint), "data:text/plain,ok");
   assert.equal(proxyUrl("javascript:void(0)", base, endpoint), "javascript:void(0)");
+});
+
+test("rewriteWorkerScript rewrites Rspack dynamic chunk imports against the worker's upstream base", () => {
+  const source = 'const chunk = import("./"+__webpack_require__.u(id));';
+  const result = rewriteWorkerScript(source, "https://github.githubassets.com/assets/wp-runtime-821e53a8825beeb4.js", endpoint);
+  const expected = "https://github.githubassets.com/assets/";
+  assert.ok(result.includes(`import(${JSON.stringify(endpoint)} + encodeURIComponent(new URL(__webpack_require__.u(id), ${JSON.stringify(expected)}).href))`));
+});
+
+test("rewriteWorkerScript rewrites import.meta.url to the upstream module URL", () => {
+  const result = rewriteWorkerScript('const base = import.meta.url;', "https://github.githubassets.com/assets/wp-runtime.js", endpoint);
+  assert.ok(result.endsWith('const base = "https://github.githubassets.com/assets/wp-runtime.js";'));
+});
+
+test("rewriteWorkerScript rewrites static relative module imports through the proxy", () => {
+  const source = 'import { __webpack_require__ } from "./wp-runtime-821e53a8825beeb4.js";';
+  const result = rewriteWorkerScript(source, "https://github.githubassets.com/assets/environment.js", endpoint);
+  assert.ok(result.includes('from "' + endpoint + encodeURIComponent("https://github.githubassets.com/assets/wp-runtime-821e53a8825beeb4.js") + '"'));
+});
+
+test("rewriteWorkerScript proxies importScripts chunk URLs through the proxy endpoint", () => {
+  const source = 'importScripts(i.p + i.u(e))';
+  const result = rewriteWorkerScript(source, "https://discord.com/assets/worker.js", endpoint);
+  assert.match(result, /importScripts\(\.\.\.\[i\.p \+ i\.u\(e\)\]\.map\(url =>/);
+  assert.match(result, /\/proxy\?url=/);
+  assert.match(result, /https:\/\/discord\.com/);
+  assert.match(result, /globalThis\.importScripts = \(\.\.\.urls\) => nativeImportScripts\(\.\.\.urls\.map\(proxy\)\)/);
+  assert.match(result, /globalThis\.XMLHttpRequest\.prototype\.open = function\(method, url, \.\.\.rest\)/);
+  assert.match(result, /globalThis\.fetch = \(input, init\) =>/);
+  assert.match(result, /navigator\.serviceWorker\.register = \(scriptURL, options\)/);
+  assert.match(result, /registration\.searchParams\.set\("target", target\.href\)/);
+});
+
+test("rewriteWorkerScript leaves blob importScripts chunks untouched", () => {
+  const source = 'importScripts(URL.createObjectURL(new Blob(["chunk"], { type: "text/javascript" })))';
+  const result = rewriteWorkerScript(source, "https://discord.com/assets/worker.js", endpoint);
+  assert.ok(result.includes('new URL(url, "https://discord.com")'));
+  assert.ok(result.includes('new URL(input, base)'));
+  assert.match(result, /target\.hash = ""/);
+  assert.match(result, /encodeURIComponent\(target\.href\) \+ fragment/);
+});
+
+test("rewriteWorkerScript balances nested call parentheses in importScripts arguments", () => {
+  const result = rewriteWorkerScript('importScripts(i.p + i.u(e))', "https://discord.com/assets/worker.js", endpoint);
+  assert.match(result, /importScripts\(\.\.\.\[i\.p \+ i\.u\(e\)\]\.map\(url =>/);
 });
 
 test("rewriteHtml rewrites resource attributes", () => {
@@ -46,10 +91,23 @@ test("rewriteHtml decodes HTML entities before proxying URLs", () => {
   assert.doesNotMatch(result, /%26amp%3B/);
 });
 
-test("rewriteHtml rewrites meta refresh URLs", () => {
-  const result = rewriteHtml('<meta http-equiv="refresh" content="0;url=/login">', base, endpoint);
-  assert.match(result, /url=\/proxy\?url=/);
-  assert.match(result, /https%3A%2F%2Fexample\.com%2Flogin/);
+test("rewriteHtml preserves direct meta-refresh and JavaScript redirect destinations", () => {
+  const input = '<!-- wp:html --><meta charset="UTF-8"><title>Redirecting...</title>' +
+    '<meta http-equiv="refresh" content="0;url=https://example.com/new-page">' +
+    '<script>window.location.replace("https://www.portal-network.com/");</script>' +
+    '<p><a href="https://www.portal-network.com/">Continue</a></p><!-- /wp:html -->';
+  const result = rewriteHtml(input, base, endpoint, "<script>runtime()</script>");
+  assert.match(result, /content="0;url=https:\/\/example\.com\/new-page"/);
+  assert.match(result, /window\.location\.replace\("https:\/\/www\.portal-network\.com\/"\)/);
+  assert.match(result, /<a href="https:\/\/www\.portal-network\.com\/"[^>]*>Continue<\/a>/);
+  assert.doesNotMatch(result, /content="0;url=\/proxy/);
+  assert.doesNotMatch(result, /window\.location\.replace\("\/proxy/);
+});
+
+test("rewriteHtml still proxies unrelated links on a page with a redirect", () => {
+  const result = rewriteHtml('<meta http-equiv="refresh" content="0;url=https://example.com/new-page"><a href="https://example.org/other">Other</a>', base, endpoint);
+  assert.match(result, /href="\/proxy\?url=https%3A%2F%2Fexample\.org%2Fother"/);
+  assert.match(result, /content="0;url=https:\/\/example\.com\/new-page"/);
 });
 
 test("rewriteHtml rewrites script src while preserving script contents", () => {
@@ -62,7 +120,31 @@ test("rewriteHtml rewrites script src while preserving script contents", () => {
 test("rewriteHtml rewrites absolute cross-origin CDN links through the proxy", () => {
   const result = rewriteHtml('<img src="https://cdn.example.com/photo.webp"><link rel="stylesheet" href="https://static.example.net/site.css">', base, endpoint);
   assert.match(result, /src="\/proxy\?url=https%3A%2F%2Fcdn\.example\.com%2Fphoto\.webp"/);
-  assert.match(result, /href="\/proxy\?url=https%3A%2F%2Fstatic\.example\.net%2Fsite\.css"/);
+  assert.ok(result.includes('href="/proxy?url=' + encodeURIComponent("https://static.example.net/site.css") + '"'));
+});
+
+test("rewriteHtml removes stale integrity hashes from proxied stylesheet links and preloads", () => {
+  const html = '<link rel="stylesheet" href="https://cdn.example.com/site.css" integrity="sha384-stale" crossorigin="anonymous">' +
+    '<link rel="preload" as="style" href="https://cdn.example.com/next.css" integrity="sha384-old">';
+  const result = rewriteHtml(html, base, endpoint);
+  assert.match(result, /href="\/proxy\?url=https%3A%2F%2Fcdn\.example\.com%2Fsite\.css"/);
+  assert.match(result, /href="\/proxy\?url=https%3A%2F%2Fcdn\.example\.com%2Fnext\.css"/);
+  assert.doesNotMatch(result, /integrity=/i);
+  assert.match(result, /crossorigin="anonymous"/);
+});
+
+test("rewriteHtml retains integrity hashes when stylesheet URLs stay direct", () => {
+  const html = '<link rel="stylesheet" href="https://www.google.com/recaptcha/styles.css" integrity="sha384-valid">';
+  const result = rewriteHtml(html, base, endpoint);
+  assert.match(result, /href="https:\/\/www\.google\.com\/recaptcha\/styles\.css"/);
+  assert.match(result, /integrity="sha384-valid"/);
+});
+
+test("rewriteHtml proxies Discord login links instead of sending users to discord.com directly", () => {
+  const result = rewriteHtml('<a href="https://discord.com/login">Log In</a><a href="https://discord.com/register">Register</a>', "https://discord.com/", endpoint);
+  assert.ok(result.includes('href="' + endpoint + encodeURIComponent("https://discord.com/login") + '"'));
+  assert.ok(result.includes('href="' + endpoint + encodeURIComponent("https://discord.com/register") + '"'));
+  assert.doesNotMatch(result, /href="https:\/\/discord\.com\/(?:login|register)"/);
 });
 
 test("rewriteHtml resolves resources against the upstream base tag", () => {
