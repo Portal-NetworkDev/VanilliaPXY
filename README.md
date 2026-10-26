@@ -4,6 +4,18 @@
 
 VanilliaPXY is a streaming transport backend for browser-side web proxy engines.
 
+## Account suuport
+
+Working account support (known and tested)
+
+* Github
+
+Planned or half working account support
+
+* Discord
+* Google
+* And more
+
 ## Install
 
 ```bash
