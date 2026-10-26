@@ -44,7 +44,10 @@ const runtimeSource = String.raw`(() => {
   const nativeCreateContextualFragment = globalThis.Range?.prototype?.createContextualFragment;
   const nativeParseFromString = globalThis.DOMParser?.prototype?.parseFromString;
   const base = globalThis.__VANILLIAPXY_TARGET__ || document.baseURI;
-  const endpoint = globalThis.__VANILLIAPXY_ENDPOINT__ || "/vanillia?url=";
+  const configuredEndpoint = new URL(globalThis.__VANILLIAPXY_ENDPOINT__ || "/vanillia?url=", location.href);
+  const endpoint = configuredEndpoint.origin === location.origin
+    ? configuredEndpoint.href
+    : new URL(configuredEndpoint.pathname + configuredEndpoint.search, location.origin).href;
   const workerEndpoint = globalThis.__VANILLIAPXY_SW__ || "/service-worker.js";
   const relayServer = new URL(location.href).searchParams.get("server") || "";
   const blobWorkerBootstrap = globalThis.__VANILLIAPXY_BLOB_BOOTSTRAP__ || "";
@@ -118,8 +121,15 @@ const runtimeSource = String.raw`(() => {
   const proxy = value => {
     if (typeof value !== "string" || !value) return value;
     const trimmed = value.trim();
-    if (/^(?:data:|mailto:|javascript:|blob:|about:|#)/i.test(trimmed)) return value;
-    if (isProxyUrl(trimmed)) return value;
+    if (/^(?:data:|mailto:|javascript:|blob:|about:|#)/i.test(trimmed)) return value;    if (isProxyUrl(trimmed)) return value;
+    if (trimmed.startsWith("/") && !trimmed.startsWith("//")) {
+      try {
+        const resolved = new URL(trimmed, base);
+        if (!/^https?:$/.test(resolved.protocol)) return value;
+        if (isCaptchaResource(resolved.href)) return value;
+        return endpoint + encodeURIComponent(resolved.href);
+      } catch { return value; }
+    }
     try {
       const normalized = normalizeAddress(trimmed);
       if (isCaptchaResource(normalized)) return value;
@@ -208,10 +218,10 @@ const runtimeSource = String.raw`(() => {
       globalThis.History.prototype[method] = function(state, unused, url) {
         if (url == null) return nativeMethod.call(this, state, unused);
         const upstream = upstreamNavigationUrl(url);
-        const proxied = isDiscordAuthUrl(upstream) ? endpoint + encodeURIComponent(upstream) : proxyNavigation(upstream);
-        const destination = new URL(proxied, location.href);
+        const destination = new URL(endpoint, location.origin + "/");
+        destination.searchParams.set("url", upstream);
         if (destination.origin !== location.origin) throw new DOMException("History URL must remain on the proxy origin", "SecurityError");
-        return nativeMethod.call(this, state, unused, destination.pathname + destination.search + destination.hash);
+        return nativeMethod.call(this, state, unused, destination.href);
       };
     } catch {}
   };
