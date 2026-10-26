@@ -1,3 +1,5 @@
+import { rewriteUrl } from "./url.js";
+
 const publicSuffixes = new Set(["com", "org", "net", "edu", "gov", "mil", "int", "biz", "info", "name", "pro", "aero", "coop", "museum", "uk", "co.uk", "org.uk", "gov.uk", "ac.uk", "com.au", "net.au", "org.au", "co.nz", "com.br", "co.jp", "co.in", "com.mx", "com.cn", "com.hk", "com.sg", "co.kr", "com.tw", "com.tr"]);
 
 const hopByHop = new Set([
@@ -20,6 +22,14 @@ const browserOnly = new Set([
   "sec-fetch-mode",
   "sec-fetch-site",
   "sec-fetch-user"
+]);
+const githubSessionCookies = new Set([
+  "__host-user_session_same_site",
+  "_gh_sess",
+  "dotcom_user",
+  "logged_in",
+  "user_session",
+  "user_session_same_site"
 ]);
 
 export function requestHeaders(headers, target) {
@@ -103,7 +113,7 @@ function originalReferer(value) {
   }
 }
 
-export function responseHeaders(headers, { rewritten = false, targetHost = "" } = {}) {
+export function responseHeaders(headers, { rewritten = false, targetHost = "", targetUrl = "", proxyEndpoint = "" } = {}) {
   const result = {};
   for (const [name, value] of Object.entries(headers)) {
     const lower = name.toLowerCase();
@@ -117,6 +127,11 @@ export function responseHeaders(headers, { rewritten = false, targetHost = "" } 
       continue;
     }
     if (["access-control-allow-origin", "access-control-allow-credentials"].includes(lower)) continue;
+    if (lower === "link" && rewritten && targetUrl && proxyEndpoint) {
+      const rewrite = link => String(link).replace(/<([^<>]*)>/g, (match, url) => `<${rewriteUrl(url, targetUrl, proxyEndpoint)}>`);
+      result[name] = Array.isArray(value) ? value.map(rewrite) : rewrite(value);
+      continue;
+    }
     result[name] = value;
   }
   result["x-robots-tag"] = "noindex, nofollow, noarchive";
@@ -163,13 +178,18 @@ function cookieScopeDomain(targetHost, domainAttribute) {
 
 function filterCookies(value, hostname) {
   const host = String(hostname ?? "").toLowerCase().replace(/\.$/, "");
+  const isGithubHost = host === "github.com" || host.endsWith(".github.com");
   const visible = [];
   for (const cookie of String(value).split(/;\s*/).filter(Boolean)) {
     const separator = cookie.indexOf("=");
     if (separator <= 0) continue;
     const name = cookie.slice(0, separator).trim();
     const marker = name.lastIndexOf("__vanilliapxy_");
-    if (marker < 0) continue;
+    if (marker < 0) {
+      const legacyName = name.toLowerCase();
+      if (host === "github.com" && githubSessionCookies.has(legacyName)) visible.push(cookie);
+      continue;
+    }
     const domain = name.slice(marker + "__vanilliapxy_".length).toLowerCase();
     if (host !== domain && !host.endsWith(`.${domain}`)) continue;
     visible.push(`${name.slice(0, marker)}=${cookie.slice(separator + 1)}`);
