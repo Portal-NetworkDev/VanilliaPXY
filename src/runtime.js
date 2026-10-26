@@ -93,12 +93,25 @@ const runtimeSource = String.raw`(() => {
       .replace(/;\s*Path=[^;]*/i, "; Path=/");
     return renamed + (attributes.includes("Path=") ? attributes : attributes + "; Path=/");
   };
+  const githubSessionCookies = new Set([
+    "__host-user_session_same_site",
+    "_gh_sess",
+    "dotcom_user",
+    "logged_in",
+    "user_session",
+    "user_session_same_site"
+  ]);
   const visibleCookies = value => String(value ?? "").split(/;\s*/).filter(Boolean).flatMap(cookie => {
     const equals = cookie.indexOf("=");
     if (equals <= 0) return [];
     const name = cookie.slice(0, equals);
     const marker = name.lastIndexOf("__vanilliapxy_");
-    if (marker < 0) return [];
+    if (marker < 0) {
+      const host = cookieHost();
+      return host === "github.com" && githubSessionCookies.has(name.toLowerCase())
+        ? [cookie]
+        : [];
+    }
     const scope = name.slice(marker + "__vanilliapxy_".length).toLowerCase();
     const host = cookieHost();
     if (host !== scope && !host.endsWith("." + scope)) return [];
