@@ -4,7 +4,7 @@
 
 VanilliaPXY is a streaming transport backend for browser-side web proxy engines.
 
-## Account suuport
+## Account support
 
 Working account support (known and tested)
 
