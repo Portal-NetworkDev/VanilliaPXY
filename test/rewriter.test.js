@@ -168,3 +168,12 @@ test("rewriteHtml rewrites inline styles and preserves direct CAPTCHA endpoints"
   assert.match(result, /url\(\/proxy\?url=https%3A%2F%2Fcdn\.example\.com%2Fa\.png\)/);
   assert.match(result, /src="https:\/\/www\.google\.com\/recaptcha\/api\.js"/);
 });
+
+test("rewriteHtml keeps Roblox client-side redirects inside the proxy", () => {
+  const html = '<script>window.location.replace("https://www.roblox.com/");</script>' +
+    '<a href="https://www.roblox.com/">Roblox home</a>';
+  const result = rewriteHtml(html, "https://www.roblox.com/", endpoint);
+  assert.match(result, /href="\/proxy\?url=https%3A%2F%2Fwww\.roblox\.com%2F"/);
+  assert.doesNotMatch(result, /data-vanillia-direct-redirect-page/);
+  assert.doesNotMatch(result, /__VANILLIAPXY_DIRECT_REDIRECTS__/);
+});
