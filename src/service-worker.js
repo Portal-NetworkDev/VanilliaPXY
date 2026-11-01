@@ -31,6 +31,14 @@ self.addEventListener("fetch", event => {
     upstream = url.origin === self.location.origin
       ? new URL(url.pathname + url.search + url.hash, base).href
       : url.href;
+    const upstreamUrl = new URL(upstream);
+    const pageHost = base.hostname.toLowerCase();
+    if ((pageHost === "roblox.com" || pageHost.endsWith(".roblox.com")) &&
+        upstreamUrl.hostname.endsWith(".alasis.vercel.app")) {
+      const subdomain = upstreamUrl.hostname.slice(0, -".alasis.vercel.app".length);
+      if (subdomain && !subdomain.includes(".")) upstreamUrl.hostname = subdomain + ".roblox.com";
+    }
+    upstream = upstreamUrl.href;
   } catch {
     return;
   }
