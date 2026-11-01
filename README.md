@@ -14,6 +14,7 @@ Planned or half working account support
 
 * Discord
 * Google
+* Roblox
 * And more
 
 ## Install
