@@ -89,7 +89,9 @@ async function proxyRequest(request, target, redirects = 0) {
     const type = String(upstream.headers.get("content-type") || "").toLowerCase();
     const source = new TextDecoder().decode(body);
     const absoluteEndpoint = proxyEndpoint(request);
-    const iconHref = type.includes("text/html") ? `/favicon?url=${encodeURIComponent(target.href)}` : "";
+    const iconUrl = new URL("/favicon", new URL(request.url).origin);
+    iconUrl.searchParams.set("url", target.href);
+    const iconHref = type.includes("text/html") ? iconUrl.href : "";
     const rewritten = type.includes("text/css")
       ? rewriteCss(source, target.href, absoluteEndpoint)
       : type.includes("javascript")
