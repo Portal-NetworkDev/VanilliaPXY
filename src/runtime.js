@@ -70,9 +70,10 @@ const runtimeSource = String.raw`(() => {
     try {
       const upstream = new URL(value);
       const pageHost = new URL(base).hostname.toLowerCase();
+      const proxyHost = configuredEndpoint.hostname.toLowerCase();
       if ((pageHost === "roblox.com" || pageHost.endsWith(".roblox.com")) &&
-          upstream.hostname.endsWith(".alasis.vercel.app")) {
-        const subdomain = upstream.hostname.slice(0, -".alasis.vercel.app".length);
+          upstream.hostname.endsWith("." + proxyHost)) {
+        const subdomain = upstream.hostname.slice(0, -(proxyHost.length + 1));
         if (subdomain && !subdomain.includes(".")) upstream.hostname = subdomain + ".roblox.com";
       }
       return upstream.href;
