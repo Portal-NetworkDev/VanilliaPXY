@@ -262,9 +262,18 @@ export function rewriteWorkerScript(text, base, endpoint = "/vanillia?url=") {
   return bootstrap + rewriteModuleImports(output + source.slice(cursor), base, endpoint);
 }
 
+function isRobloxHost(value) {
+  try {
+    const hostname = new URL(value).hostname.toLowerCase();
+    return hostname === "roblox.com" || hostname.endsWith(".roblox.com");
+  } catch {
+    return false;
+  }
+}
+
 export function rewriteHtml(text, base, endpoint = "/vanillia?url=", runtime = "", iconHref = "") {
   const effectiveBase = findBase(text, base);
-  const directRedirects = directRedirectTargets(text, effectiveBase);
+  const directRedirects = isRobloxHost(effectiveBase) ? new Set() : directRedirectTargets(text, effectiveBase);
   const protectedBlocks = [];
   let output = String(text ?? "").replace(protectedBlockPattern, (match, open, tagName, content, close) => {
     const index = protectedBlocks.push({ tagName: tagName.toLowerCase(), content }) - 1;
