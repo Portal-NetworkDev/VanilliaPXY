@@ -66,6 +66,18 @@ const runtimeSource = String.raw`(() => {
       ? "https://" + input
       : input;
   };
+  const normalizeUpstreamHost = value => {
+    try {
+      const upstream = new URL(value);
+      const pageHost = new URL(base).hostname.toLowerCase();
+      if ((pageHost === "roblox.com" || pageHost.endsWith(".roblox.com")) &&
+          upstream.hostname.endsWith(".alasis.vercel.app")) {
+        const subdomain = upstream.hostname.slice(0, -".alasis.vercel.app".length);
+        if (subdomain && !subdomain.includes(".")) upstream.hostname = subdomain + ".roblox.com";
+      }
+      return upstream.href;
+    } catch { return value; }
+  };
   let currentTargetHost = "";
   const cookieHost = () => {
     try { return new URL(currentTargetHost || globalThis.__VANILLIAPXY_TARGET__ || base).hostname.toLowerCase().replace(/\.$/, ""); }
@@ -137,7 +149,7 @@ const runtimeSource = String.raw`(() => {
     if (/^(?:data:|mailto:|javascript:|blob:|about:|#)/i.test(trimmed)) return value;    if (isProxyUrl(trimmed)) return value;
     if (trimmed.startsWith("/") && !trimmed.startsWith("//")) {
       try {
-        const resolved = new URL(trimmed, base);
+        const resolved = new URL(normalizeUpstreamHost(new URL(trimmed, base).href));
         if (!/^https?:$/.test(resolved.protocol)) return value;
         if (isCaptchaResource(resolved.href)) return value;
         return endpoint + encodeURIComponent(resolved.href);
@@ -146,7 +158,7 @@ const runtimeSource = String.raw`(() => {
     try {
       const normalized = normalizeAddress(trimmed);
       if (isCaptchaResource(normalized)) return value;
-      const resolved = new URL(normalized, base);
+      const resolved = new URL(normalizeUpstreamHost(new URL(normalized, base).href));
       if (!/^https?:$/.test(resolved.protocol)) return value;
       return endpoint + encodeURIComponent(resolved.href);
     } catch { return value; }
