@@ -70,15 +70,15 @@ export function decodeResponseText(body, contentType = "") {
     return new TextDecoder("utf-16be").decode(bytes);
   }
 
-  let charset = String(contentType).match(/\\bcharset\\s*=\\s*["']?([^;"'\\s]+)/i)?.[1];
-  if (!charset && /(?:text\\/html|application\\/xhtml\\+xml)/i.test(contentType)) {
+  let charset = String(contentType).match(/\bcharset\s*=\s*["']?([^;"'\s]+)/i)?.[1];
+  if (!charset && /(?:text\/html|application\/xhtml\+xml)/i.test(contentType)) {
     const prefix = new TextDecoder("windows-1252").decode(bytes.subarray(0, 4096));
-    const metaTags = prefix.match(/<meta\\b[^>]*>/gi) || [];
+    const metaTags = prefix.match(/<meta\b[^>]*>/gi) || [];
     for (const tag of metaTags) {
-      charset = tag.match(/\\bcharset\\s*=\\s*["']?([^\\s"'/>;]+)/i)?.[1];
-      if (!charset && /\\bhttp-equiv\\s*=\\s*["']?content-type/i.test(tag)) {
-        const content = tag.match(/\\bcontent\\s*=\\s*(["'])(.*?)\\1/i)?.[2] || "";
-        charset = content.match(/\\bcharset\\s*=\\s*([^;\\s]+)/i)?.[1];
+      charset = tag.match(/\bcharset\s*=\s*["']?([^\s"'/>;]+)/i)?.[1];
+      if (!charset && /\bhttp-equiv\s*=\s*["']?content-type/i.test(tag)) {
+        const content = tag.match(/\bcontent\s*=\s*(["'])(.*?)\1/i)?.[2] || "";
+        charset = content.match(/\bcharset\s*=\s*([^;\s]+)/i)?.[1];
       }
       if (charset) break;
     }
@@ -134,7 +134,7 @@ async function proxyRequest(request, target, redirects = 0) {
     delete headersOut["content-length"];
     delete headersOut["content-encoding"];
     const outputType = String(headersOut["content-type"] || "text/html")
-      .replace(/;\\s*charset\\s*=\\s*(?:"[^"]*"|'[^']*'|[^;\\s]+)/i, "")
+      .replace(/;\s*charset\s*=\s*(?:"[^"]*"|'[^']*'|[^;\s]+)/i, "")
       .replace(/;\\s*$/, "");
     headersOut["content-type"] = outputType + "; charset=utf-8";
     return new Response(rewritten, { status: upstream.status, headers: responseHeadersInit(headersOut) });
