@@ -57,6 +57,40 @@ async function readBody(response) {
   const buffer = await response.arrayBuffer();
   return buffer.byteLength > maxRewriteSize ? null : new Uint8Array(buffer);
 }
+
+export function decodeResponseText(body, contentType = "") {
+  const bytes = body instanceof Uint8Array ? body : new Uint8Array(body);
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return new TextDecoder("utf-16le").decode(bytes);
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return new TextDecoder("utf-16be").decode(bytes);
+  }
+
+  let charset = String(contentType).match(/\\bcharset\\s*=\\s*["']?([^;"'\\s]+)/i)?.[1];
+  if (!charset && /(?:text\\/html|application\\/xhtml\\+xml)/i.test(contentType)) {
+    const prefix = new TextDecoder("windows-1252").decode(bytes.subarray(0, 4096));
+    const metaTags = prefix.match(/<meta\\b[^>]*>/gi) || [];
+    for (const tag of metaTags) {
+      charset = tag.match(/\\bcharset\\s*=\\s*["']?([^\\s"'/>;]+)/i)?.[1];
+      if (!charset && /\\bhttp-equiv\\s*=\\s*["']?content-type/i.test(tag)) {
+        const content = tag.match(/\\bcontent\\s*=\\s*(["'])(.*?)\\1/i)?.[2] || "";
+        charset = content.match(/\\bcharset\\s*=\\s*([^;\\s]+)/i)?.[1];
+      }
+      if (charset) break;
+    }
+    if (!charset) charset = "windows-1252";
+  }
+
+  try {
+    return new TextDecoder(charset || "utf-8").decode(bytes);
+  } catch {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+}
 async function proxyRequest(request, target, redirects = 0) {
   if (redirects > maxRedirects) return errorResponse(508, "Too many redirects");
   const allowed = await validateTarget(target.href);
@@ -87,7 +121,7 @@ async function proxyRequest(request, target, redirects = 0) {
     const body = await readBody(upstream);
     if (body === null) return errorResponse(413, "Response exceeds rewrite limit");
     const type = String(upstream.headers.get("content-type") || "").toLowerCase();
-    const source = new TextDecoder().decode(body);
+    const source = decodeResponseText(body, upstream.headers.get("content-type") || "");
     const absoluteEndpoint = proxyEndpoint(request);
     const iconUrl = new URL("/favicon", new URL(request.url).origin);
     iconUrl.searchParams.set("url", target.href);
@@ -99,6 +133,10 @@ async function proxyRequest(request, target, redirects = 0) {
         : rewriteHtml(source, target.href, absoluteEndpoint, runtimeScript(absoluteEndpoint, "/service-worker.js", target.href) + adblockerScript(), iconHref);
     delete headersOut["content-length"];
     delete headersOut["content-encoding"];
+    const outputType = String(headersOut["content-type"] || "text/html")
+      .replace(/;\\s*charset\\s*=\\s*(?:"[^"]*"|'[^']*'|[^;\\s]+)/i, "")
+      .replace(/;\\s*$/, "");
+    headersOut["content-type"] = outputType + "; charset=utf-8";
     return new Response(rewritten, { status: upstream.status, headers: responseHeadersInit(headersOut) });
   } catch (error) {
     return error?.name === "AbortError" ? errorResponse(504, "Upstream request timed out") : errorResponse(502, "Unable to reach upstream");
